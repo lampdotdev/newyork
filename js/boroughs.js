@@ -2530,7 +2530,7 @@ function createSignMaterial(tex, nightGlow) {
   const t = texture(tex);
   mat.colorNode = t.rgb;
   mat.opacityNode = t.a;
-  mat.alphaTest = 0.4;
+  mat.alphaTestNode = float(0.4); // not `alphaTest`, see createTreeMaterial
   mat.emissiveNode = t.rgb.mul(float(0.25).add(nightFactorNode().mul(nightGlow)));
   return mat;
 }

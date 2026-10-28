@@ -17,7 +17,11 @@ import {
 } from './city-config.js';
 import { cityUniforms, createSteamMaterial, createTreeGrateMaterial, createGodRayMaterial } from './tsl-materials.js';
 import { createTreeField } from './trees.js';
-import { pavedPlazaRects, centralParkClearings, parkTreeSites, sidewalkBlocks, parkLampSites } from './city-grid.js';
+import { REAL_TREES } from './tree-geodata.js';
+import { placeStreetTrees } from './tree-placements.js';
+import { createSubwayEntranceParts, createFoodCartParts } from './street-props.js';
+import { createSubwayEntrances } from './subway-entrances.js';
+import { pavedPlazaRects, centralParkClearings, parkTreeSites, parkLampSites } from './city-grid.js';
 import { bryantParkLawn } from './landmarks.js';
 
 // Instanced street furniture, traffic signals, trees and nearby light pools.
@@ -98,7 +102,7 @@ function createWalkSignalMaterial(clock) {
   return mat;
 }
 
-function buildStreetDetails(scene) {
+function buildStreetDetails(scene, colliders = []) {
   const group = new THREE.Group();
   group.name = 'ManhattanStreetDetails';
 
@@ -154,21 +158,21 @@ function buildStreetDetails(scene) {
       new THREE.CylinderGeometry(LENS_R + 0.03, LENS_R + 0.03, 0.24, 14, 1, true, Math.PI / 2, Math.PI)
         .rotateX(Math.PI / 2).translate(0, ly, HEAD_D / 2 + 0.12)
     ))
-  ].map((g) => g.toNonIndexed()));
+  ]);
   const signalLensGeo = mergeGeometries(LENS_Y.flatMap((ly) => bothFaces(new THREE.CircleGeometry(LENS_R, 18).translate(0, ly, HEAD_D / 2 + 0.004))));
   // Pedestrian signal: housing with the WALK / hand face lit on both sides (+-z, toward the crosswalk's far end)
   const walkHousingGeo = new THREE.BoxGeometry(0.34, 0.4, 0.24);
   const walkPanelGeo = mergeGeometries(bothFaces(new THREE.PlaneGeometry(0.27, 0.31).translate(0, 0, 0.125)));
   // Cobra-head luminaire on the end of the arm: flattened grey housing, flat lens underneath
-  const lampHousingGeo = new THREE.SphereGeometry(1, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2).scale(0.7, 0.2, 0.3);
+  const lampHousingGeo = new THREE.SphereGeometry(1, 14, 4, 0, Math.PI * 2, 0, Math.PI / 2).scale(0.7, 0.2, 0.3);
   const lampLensGeo = new THREE.CircleGeometry(1, 16).rotateX(Math.PI / 2).scale(0.6, 1, 0.24).translate(0, -0.005, 0);
   // Classic NYC cast-iron pedestrian post-top globe lightpole (fluted base + shaft + decorative capital + opal globe)
   const pedLampPostGeo = mergeGeometries([
     new THREE.CylinderGeometry(0.11, 0.16, 0.85, 10).translate(0, 0.425, 0),
     new THREE.CylinderGeometry(0.065, 0.085, 2.75, 10).translate(0, 2.22, 0),
     new THREE.CylinderGeometry(0.14, 0.07, 0.16, 10).translate(0, 3.62, 0)
-  ].map((g) => g.toNonIndexed()));
-  const pedGlobeGeo = new THREE.SphereGeometry(0.23, 12, 10).translate(0, 3.84, 0);
+  ]);
+  const pedGlobeGeo = new THREE.SphereGeometry(0.23, 8, 6).translate(0, 3.84, 0);
 
   // =========================================================================
   // 1. NYC CANTILEVERED TRAFFIC SIGNALS, STREET BLADES & WALK SIGNALS
@@ -496,6 +500,7 @@ function buildStreetDetails(scene) {
     }
     inst.instanceMatrix.needsUpdate = true;
     group.add(inst);
+    return inst;
   }
 
   addMatrixArrayInstanced(unitCyl, poleMetalMat, poleMatrices);
@@ -508,7 +513,14 @@ function buildStreetDetails(scene) {
   addMatrixArrayInstanced(walkPanelGeo, walkSignalGlow, walkBoxMatrices, false);
   addMatrixArrayInstanced(lampHousingGeo, poleMetalMat, lampHeadMatrices);
   addMatrixArrayInstanced(lampLensGeo, lampBulbGlow, lampHeadMatrices, false);
-  addMatrixArrayInstanced(pedLampPostGeo, poleMetalMat, pedPostMatrices);
+  const pedPosts = addMatrixArrayInstanced(pedLampPostGeo, poleMetalMat, pedPostMatrices);
+  // ~28k posts: they cast as 4-sided base + shaft (16 triangles instead of 120; scene-culling.js shadow stand-ins)
+  if (pedPosts) {
+    pedPosts.userData.shadowStandIn = mergeGeometries([
+      new THREE.CylinderGeometry(0.12, 0.18, 0.85, 4, 1, true).translate(0, 0.425, 0),
+      new THREE.CylinderGeometry(0.072, 0.094, 2.85, 4, 1, true).translate(0, 2.275, 0)
+    ]);
+  }
   addMatrixArrayInstanced(pedGlobeGeo, pedGlobeGlow, pedPostMatrices, false);
 
   // =========================================================================
@@ -684,85 +696,56 @@ function buildStreetDetails(scene) {
   // =========================================================================
   // 4. MTA SUBWAY ENTRANCES WITH GLOWING GREEN GLOBE LAMPS
   // =========================================================================
-  const subwayRailingMat = new THREE.MeshStandardNodeMaterial({
-    color: 0x1a3826, // Classic MTA Subway forest green ironwork
-    roughness: 0.5,
-    metalness: 0.65
-  });
-  const subwayGlobeMat = new THREE.MeshBasicNodeMaterial({ color: 0x55ff88 });
+  const subwaySites = createSubwayEntrances(colliders, footprints);
+  const subwayMatrices = [];
+  const subwayColliders = [];
+  for (const { x, y, z, yaw } of subwaySites) {
+    const cs = Math.cos(yaw), sn = Math.sin(yaw);
+    subwayMatrices.push(new THREE.Matrix4().makeRotationY(yaw).setPosition(x, y, z));
+    const hw = 1.21, hd = 3.16;
+    const ex = Math.abs(cs) * hw + Math.abs(sn) * hd;
+    const ez = Math.abs(sn) * hw + Math.abs(cs) * hd;
+    addFootprint(x, z, ex * 2, ez * 2, true);
+    subwayColliders.push({
+      minX: x - ex, maxX: x + ex, minZ: z - ez, maxZ: z + ez, minY: 0.22, maxY: y + 2.8,
+      obb: { cx: x, cz: z, hx: hw, hz: hd, cs, sn }
+    });
+    streetPointSites.push({ x: x + sn * 2.98, y: y + 2.65, z: z + cs * 2.98, color: 0xb9e8c8, intensity: 12, dist: 8.5 });
+  }
+  for (const part of createSubwayEntranceParts()) {
+    addMatrixArrayInstanced(part.geometry, part.material, subwayMatrices, part.castShadow);
+  }
 
-  const subwayLocations = [
-    [-16.5, 162],  // 34th St - Herald Sq / 5th Ave
-    [16.5, 162],
-    [-16.5, 16],   // 42nd St - Bryant Park / 5th Ave
-    [-126.5, 16],  // 42nd St - 6th Ave
-    [-203.5, -16], // Times Sq - 42nd St
-    [-236.5, -74], // Times Sq - 45th St
-    [126.5, -16],  // Grand Central - 42nd St
-    [203.5, -16],  // Lexington Ave / Chrysler
-    [203.5, -252], // 53rd St - Lex Ave (Citigroup)
-    [-16.5, -162], // 47th-50th Sts Rockefeller Ctr
-    [-16.5, 342]   // 23rd St - Flatiron
-  ];
-
-  const subwayRailMatrices = [];
-  const subwayPostMatrices = [];
-  const subwayGlobeMatrices = [];
-
-  const snapToCurbIsland = (x, z, pad = 1.1) => {
-    if (isOnCurbIsland(x, z, pad)) return { x, z };
-    for (let r = 2; r <= 18; r += 2) {
+  // =========================================================================
+  // 5. NYC HOT DOG / HALAL FOOD CARTS
+  // =========================================================================
+  // Keep the whole prop on the sidewalk, outside building lots.
+  const findPropSite = (x, z, width, depth) => {
+    const hw = width * 0.5 + 0.15;
+    const hd = depth * 0.5 + 0.15;
+    const fits = (px, pz) => {
+      const block = blockAt(px, pz);
+      if (!block || block.median) return false;
+      for (const dx of [-hw, 0, hw]) {
+        for (const dz of [-hd, 0, hd]) {
+          if (blockAt(px + dx, pz + dz) !== block) return false;
+        }
+      }
+      return !block.rects.some(([x0, x1, z0, z1]) =>
+        px + hw > x0 && px - hw < x1 && pz + hd > z0 && pz - hd < z1)
+        && !subwayColliders.some((b) => px + hw > b.minX && px - hw < b.maxX && pz + hd > b.minZ && pz - hd < b.maxZ);
+    };
+    if (fits(x, z)) return { x, z };
+    for (let r = 2; r <= 40; r += 2) {
       for (let k = 0; k < 16; k++) {
-        const ang = (k / 16) * Math.PI * 2;
-        const nx = x + Math.cos(ang) * r;
-        const nz = z + Math.sin(ang) * r;
-        if (isOnCurbIsland(nx, nz, pad)) return { x: nx, z: nz };
+        const angle = k / 16 * Math.PI * 2;
+        const px = x + Math.cos(angle) * r;
+        const pz = z + Math.sin(angle) * r;
+        if (fits(px, pz)) return { x: px, z: pz };
       }
     }
-    return { x, z };
+    return null;
   };
-
-  for (const [oldX, oldZ] of subwayLocations) {
-    const raw = fromOldFrame(oldX, oldZ); // (authored on the former compressed grid)
-    const { x: subX, z: subZ } = snapToCurbIsland(raw.x, raw.z, 1.2);
-    // Iron railing enclosure around sidewalk stairs
-    dummy.position.set(subX, 0.8, subZ);
-    dummy.rotation.set(0, 0, 0);
-    dummy.scale.set(2.1, 1.15, 6.2);
-    dummy.updateMatrix();
-    subwayRailMatrices.push(dummy.matrix.clone());
-    addFootprint(subX, subZ, 2.1, 6.2);
-
-    // Twin MTA Green Globe Post Lamps at stair entrance
-    for (const ox of [-0.85, 0.85]) {
-      dummy.position.set(subX + ox, 1.9, subZ + 2.9);
-      dummy.scale.set(0.09, 1.4, 0.09);
-      dummy.updateMatrix();
-      subwayPostMatrices.push(dummy.matrix.clone());
-
-      dummy.position.set(subX + ox, 2.7, subZ + 2.9);
-      dummy.scale.set(0.26, 0.26, 0.26);
-      dummy.updateMatrix();
-      subwayGlobeMatrices.push(dummy.matrix.clone());
-    }
-    streetPointSites.push({ x: subX, y: 2.75, z: subZ + 2.9, color: 0x48ff80, intensity: 18, dist: 8.5 });
-  }
-  addMatrixArrayInstanced(unitBox, subwayRailingMat, subwayRailMatrices);
-  addMatrixArrayInstanced(unitCyl, subwayRailingMat, subwayPostMatrices);
-  addMatrixArrayInstanced(new THREE.SphereGeometry(1, 10, 10), subwayGlobeMat, subwayGlobeMatrices, false);
-
-  // =========================================================================
-  // 5. NYC HOT DOG / HALAL FOOD CARTS WITH UMBRELLAS & SIDEWALK PROPS
-  // =========================================================================
-  const cartSteelMat = new THREE.MeshStandardNodeMaterial({
-    color: 0xd0d8e0,
-    roughness: 0.25,
-    metalness: 0.88
-  });
-  const umbrellaMat = new THREE.MeshStandardNodeMaterial({
-    color: 0x1e64d8, // Classic NYC blue & yellow umbrella
-    roughness: 0.6
-  });
 
   const cartLocations = [
     [-17, 152],   // Empire State corner
@@ -777,25 +760,19 @@ function buildStreetDetails(scene) {
     [-17, 325]    // Flatiron Plaza
   ];
 
-  const cartBoxMatrices = [];
-  const umbrellaMatrices = [];
+  const cartMatrices = [];
   for (const [ox, oz] of cartLocations) {
-    const raw = fromOldFrame(ox, oz); // (authored on the former compressed grid)
-    const { x: cx, z: cz } = snapToCurbIsland(raw.x, raw.z, 1.1);
-    dummy.position.set(cx, 0.85, cz);
-    dummy.rotation.set(0, 0, 0);
-    dummy.scale.set(1.5, 1.25, 2.2);
-    dummy.updateMatrix();
-    cartBoxMatrices.push(dummy.matrix.clone());
-
-    dummy.position.set(cx, 2.55, cz);
-    dummy.scale.set(1.7, 0.75, 1.7);
-    dummy.updateMatrix();
-    umbrellaMatrices.push(dummy.matrix.clone());
-    streetPointSites.push({ x: cx, y: 2.15, z: cz, color: 0xffdf9e, intensity: 28, dist: 9.5 });
+    const raw = fromOldFrame(ox, oz);
+    const site = findPropSite(raw.x, raw.z, 3.5, 3.5);
+    if (!site) continue;
+    const { x, z } = site;
+    cartMatrices.push(new THREE.Matrix4().makeTranslation(x, 0, z));
+    addFootprint(x, z, 1.5, 2.2);
+    streetPointSites.push({ x, y: 2.15, z, color: 0xffdf9e, intensity: 28, dist: 9.5 });
   }
-  addMatrixArrayInstanced(unitBox, cartSteelMat, cartBoxMatrices);
-  addMatrixArrayInstanced(new THREE.ConeGeometry(1, 1, 8), umbrellaMat, umbrellaMatrices);
+  for (const part of createFoodCartParts()) {
+    addMatrixArrayInstanced(part.geometry, part.material, cartMatrices, part.castShadow);
+  }
 
   // =========================================================================
   // 6. FIRE HYDRANTS & USPS BLUE MAILBOXES ALONG CURBS (INSTANCED)
@@ -955,73 +932,14 @@ function buildStreetDetails(scene) {
   // B5. The squares, the other parks & the plazas (sites laid out by city-grid.js)
   for (const s of parkTreeSites || []) treePositions.push(s);
 
-  // C & D. Street trees on the raised sidewalks of every real block (city-config.js BLOCKS via the slabs city-grid.js
-  //        laid): along the avenue fronts (w / e edges) and, in the residential neighbourhoods, both curbs of the side
-  //        streets (n / s edges) — honey locusts on the narrow streets, planes, locusts & elms on the wider ones, with
-  //        random missing trees & the odd unplanted block. Never in plazas or parks.
-  const sidewalkTreePositions = [];
-  const SIDEWALK_Y = 0.22;
-  const swBlocks = sidewalkBlocks || [];
-  const onSidewalk = (x, z) => {
-    const b = blockAt(x, z);
-    return !!b && !(b.park > 0.6) && !b.median;
-  };
-  // Street trees turn in 90° steps with the crown squeezed across the sidewalk, away from the facades
-  function addStreetTree(x, z, scale, species, acrossX, extra = {}) {
-    if (!onSidewalk(x, z) || inPlaza(x, z, 1.5) || !isClearOfPoles(x, z, 2.2)) return;
-    const q = Math.floor(hashPos(x, 8.8, z) * 3.999);
-    const t = { x, y: SIDEWALK_Y, z, scale, species, yaw: q * Math.PI * 0.5, tier: acrossX ? 1 : 2, ...extra };
-    if (acrossX === (q % 2 === 0)) t.sx = extra.squeeze || 0.82;
-    else t.sz = extra.squeeze || 0.82;
-    treePositions.push(t);
-    sidewalkTreePositions.push(t);
-  }
-  const RESIDENTIAL = new Set(['uws', 'ues', 'harlem', 'morningside', 'east_harlem', 'chelsea', 'west_chelsea', 'gramercy', 'murray_hill',
-    'west_village', 'village', 'east_village', 'lower_east_side', 'turtle_bay', 'hells_kitchen', 'stuy_town', 'tribeca', 'battery_park_city',
-    'little_italy', 'chinatown', 'soho', 'hudson_square']);
-  const COMMERCIAL = new Set(['midtown', 'billionaires_row', 'garment', 'fidi', 'civic_center', 'hudson_yards', 'flatiron', 'nomad']);
-  const AVE_SP = 17;
-  const CROSS_SP = 14;
-  for (const s of swBlocks) {
-    const b = s.block;
-    if (!b || b.median || b.park > 0.6) continue;
-    const res = RESIDENTIAL.has(b.district);
-    const x0 = s.cx - s.w * 0.5;
-    const x1 = s.cx + s.w * 0.5;
-    const z0 = s.cz - s.d * 0.5;
-    const z1 = s.cz + s.d * 0.5;
-    // C. avenue fronts (the slab's short w / e edges on a grid block)
-    if (s.d >= 20) {
-      const thin = COMMERCIAL.has(b.district) ? 0.55 : 0.3;
-      for (const [x, side] of [[x0 + 1.3, -1], [x1 - 1.3, 1]]) {
-        const n = Math.floor((s.d - 10) / AVE_SP) + 1;
-        const zs = z0 + (s.d - (n - 1) * AVE_SP) * 0.5;
-        for (let i = 0; i < n; i++) {
-          const tz = zs + i * AVE_SP;
-          if (hashPos(x, 3.1, tz) < thin) continue;
-          addStreetTree(x, tz, 0.66 + hashPos(tz, 3.1, x) * 0.14, mixSpecies(hashPos(x, side, tz), 0.4, 0.35), true);
-        }
-      }
-    }
-    // D. side-street curbs (residential neighbourhoods)
-    if (!res || s.w < 24 || hashPos(s.cx, 4.2, s.cz) < 0.22) continue;
-    for (const side of [-1, 1]) {
-      const edge = side < 0 ? z0 : z1;
-      const narrow = !!blockAt(s.cx, edge + side * 14); // a block across within ~14 m: a narrow side street
-      const z = edge - side * (narrow ? 0.9 : 1.25);
-      const n = Math.floor((s.w - 7) / CROSS_SP) + 1;
-      const xs = s.cx - ((n - 1) * CROSS_SP) * 0.5;
-      for (let i = 0; i < n; i++) {
-        const x = xs + i * CROSS_SP + (hashPos(i, s.cz, side) - 0.5) * 1.6;
-        const r = hashPos(x, 6.1, z);
-        if (r < 0.32) continue;
-        const species = narrow ? 1 : mixSpecies(hashPos(z, 2.9, x), 0.4, 0.35);
-        const scale = narrow ? 0.54 + r * 0.1 : 0.6 + r * 0.24;
-        addStreetTree(x, z, scale, species, false, { pitRot: Math.PI / 2, grate: false, pitS: narrow ? 0.7 : 1, squeeze: narrow ? 0.7 : 0.82 });
-      }
-    }
-  }
-  console.info(`[streetDetails] ${treePositions.length} trees (${sidewalkTreePositions.length} street trees)`);
+  // Surveyed street trees; parks keep their authored terrain, clearings and tree layouts.
+  let sidewalkTreePositions = placeStreetTrees(REAL_TREES, treePositions,
+    (x, z) => !inPlaza(x, z, 1.5) && isClearOfPoles(x, z, 2.2));
+  for (const tree of sidewalkTreePositions) treePositions.push(tree);
+  const treeField = createTreeField(scene, treePositions, [...colliders, ...subwayColliders]);
+  group.add(treeField.group);
+  sidewalkTreePositions = sidewalkTreePositions.filter((t) => treeField.sites.has(t));
+  console.info(`[streetDetails] ${treeField.stats.trees} trees (${sidewalkTreePositions.length} street trees)`);
 
   const grateMat = createTreeGrateMaterial();
   const pitCurbMat = new THREE.MeshStandardNodeMaterial({ color: 0x484642, roughness: 0.88 });
@@ -1062,18 +980,18 @@ function buildStreetDetails(scene) {
   pitCurbInst.instanceMatrix.needsUpdate = true;
   pitSoilInst.instanceMatrix.needsUpdate = true;
   pitGrateInst.instanceMatrix.needsUpdate = true;
-  for (const pit of [pitCurbInst, pitSoilInst, pitGrateInst]) pit.computeBoundingSphere();
+  // Their footprint would keep these 20 cm boxes drawn at any distance (scene-culling.js): culled with the cross-street
+  // trees over them instead (trees.js MAX_DIST)
+  for (const pit of [pitCurbInst, pitSoilInst, pitGrateInst]) {
+    pit.computeBoundingSphere();
+    pit.userData.cullDistance = 950;
+  }
   group.add(pitCurbInst, pitSoilInst, pitGrateInst);
 
   function hashPos(x, y, z) {
     const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
     return s - Math.floor(s);
   }
-
-  // Procedural trees (js/trees.js): species skeletons with leaf-spray cards, one instanced mesh per species, variant &
-  // level of detail, each tree's level following the camera
-  const treeField = createTreeField(scene, treePositions);
-  group.add(treeField.group);
 
   // =========================================================================
   // 8. CLUSTERED STREETLIGHTS & STREET FURNITURE LIGHT POOLS
