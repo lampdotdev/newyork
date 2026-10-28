@@ -1,4 +1,4 @@
-<p align="center"><img src=".github/icon.png" width="128" height="128" alt=""></p>
+<p align="center"><img src=".github/icon/icon.png" width="128" height="128" alt=""></p>
 
 <h1 align="center">New York</h1>
 
