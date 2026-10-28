@@ -1,12 +1,24 @@
-# New York
+<p align="center"><img src=".github/icon.png" width="128" height="128" alt=""></p>
 
-Mr.doob's Slop New York: explore Manhattan on foot, by car, by bike or by helicopter.
+<h1 align="center">New York</h1>
 
-Made with [Lamp](https://lamp.dev), a Mac app that builds apps from a description and changes them as you ask.
+<p align="center">Mr.doob's Slop New York: explore Manhattan on foot, by car, by bike or by helicopter.</p>
+
+<p align="center"><a href="https://lampdotdev.github.io/newyork/"><b>Play it in your browser</b></a> · <a href="#remix-it-with-lamp">Remix it with Lamp</a></p>
+
+<p align="center"><img src=".github/preview.png" width="720" alt="New York"></p>
+
+## Make New York yours
+
+It's yours to change by asking Lamp. A few places to start:
+
+- Make it a snowy winter night
+- Add taxi fares against the clock
+- Move the city to the Moon
 
 ## Remix it with Lamp
 
-With Lamp, choose File → Open from GitHub… and paste this repository's address (`https://github.com/lampdotdev/newyork`): you get this exact wish, yours to change by asking, with the credits below kept. Don't have Lamp? [Get it](https://lamp.dev).
+[Lamp](https://lamp.dev) is a Mac app that builds apps from a description and changes them as you ask. In Lamp, choose File → Open from GitHub… and paste `https://github.com/lampdotdev/newyork`: you get this exact wish, yours to change, with the credits below kept.
 
 ## Building it
 
@@ -25,5 +37,6 @@ NYC Open Data is used under its own terms (LicenseRef-NYC-Open-Data).
 
 Terrain Tiles is used under its own terms (LicenseRef-USGS-Public-Domain).
 
-Remixed from [New York](https://github.com/lampdotdev/newyork) (a Lamp starter).
+## License
 
+MIT. See [LICENSE](LICENSE).
