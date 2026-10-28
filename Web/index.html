@@ -24,7 +24,13 @@
   <link rel="modulepreload" href="./js/city-config.js" />
   <link rel="modulepreload" href="./js/tsl-materials.js" />
   <link rel="modulepreload" href="./js/trees.js" />
-  <link rel="modulepreload" href="./js/actor-models.js" />
+  <link rel="modulepreload" href="./js/tree-placements.js" />
+  <link rel="modulepreload" href="./js/tree-geodata.js" />
+  <link rel="preload" href="./js/tree-geodata.bin.gz" as="fetch" crossorigin />
+  <link rel="modulepreload" href="./js/vehicles.js" />
+  <link rel="modulepreload" href="./js/cars.js" />
+  <link rel="modulepreload" href="./js/bus.js" />
+  <link rel="modulepreload" href="./js/helicopter.js" />
   <link rel="modulepreload" href="./js/vehicle-lights.js" />
   <link rel="modulepreload" href="./js/vehicle-physics.js" />
   <link rel="modulepreload" href="./js/pedestrians.js" />
@@ -32,9 +38,17 @@
   <link rel="modulepreload" href="./js/city-grid.js" />
   <link rel="modulepreload" href="./js/boroughs.js" />
   <link rel="modulepreload" href="./js/buildings.js" />
+  <link rel="modulepreload" href="./js/building-details.js" />
+  <link rel="modulepreload" href="./js/building-geodata.js" />
+  <link rel="preload" href="./js/building-geodata.bin.gz" as="fetch" crossorigin />
+  <link rel="modulepreload" href="./js/building-footprints.js" />
+  <link rel="modulepreload" href="./js/building-collision.js" />
   <link rel="modulepreload" href="./js/fire-escapes.js" />
   <link rel="modulepreload" href="./js/landmarks.js" />
   <link rel="modulepreload" href="./js/street-details.js" />
+  <link rel="modulepreload" href="./js/street-props.js" />
+  <link rel="modulepreload" href="./js/subway-geodata.js" />
+  <link rel="modulepreload" href="./js/subway-entrances.js" />
   <link rel="modulepreload" href="./js/road-network.js" />
   <link rel="modulepreload" href="./js/road-paint.js" />
   <link rel="modulepreload" href="./js/traffic.js" />
@@ -93,7 +107,7 @@
       <span class="mta-bullet loader-bullet" aria-hidden="true">NY</span>
       <div class="loader-title">Slop New York</div>
       <div class="loader-track is-indeterminate" aria-hidden="true"><span id="loading-progress" class="loader-fill"></span></div>
-      <div id="loading-status">Compiling shaders...</div>
+      <div id="loading-status">Loading city code and data...</div>
     </div>
   </div>
 

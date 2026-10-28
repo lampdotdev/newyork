@@ -9,7 +9,7 @@
   "upstream" : [
     {
       "author" : "Mr.doob",
-      "commit" : "199f010cf9b35eb58ec934d95eba1ab977c880c1",
+      "commit" : "13dd142b480bcfa01a6b18e36127c87e41cb4d80",
       "license" : "MIT",
       "licenseFile" : "Web/LICENSE-slop-newyork",
       "name" : "Slop New York",
@@ -32,6 +32,12 @@
       "license" : "LicenseRef-USGS-Public-Domain",
       "name" : "Terrain Tiles",
       "url" : "https://registry.opendata.aws/terrain-tiles/"
+    },
+    {
+      "author" : "Metropolitan Transportation Authority",
+      "license" : "LicenseRef-NY-Open-Data",
+      "name" : "MTA Subway Entrances and Exits",
+      "url" : "https://data.ny.gov/Transportation/MTA-Subway-Entrances-and-Exits-2024/i9wp-a4ja"
     }
   ]
 }

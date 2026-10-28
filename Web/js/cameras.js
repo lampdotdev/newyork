@@ -258,9 +258,9 @@ class CameraSystem {
       }
 
       case 'centralPark': {
-        // Inside Central Park South looking across The Pond, Gapstow Bridge, The Mall, Sheep Meadow & UWS/UES Skylines
+        // Above the southern canopy, looking across The Pond toward the park and skyline.
         const sway = Math.sin(elapsed * 0.22) * 3.5;
-        desiredPos.set(-70.0 + sway, 14.0, -1425.0);
+        desiredPos.set(-70.0 + sway, 26.0, -1425.0);
         desiredLook.set(-250.0, 6.5, -1690.0);
         break;
       }

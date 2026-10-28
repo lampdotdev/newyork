@@ -61,7 +61,7 @@ if [[ "$PLACE" == "ios" ]]; then
 <plist version="1.0"><dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleExecutable</key><string>NewYork</string>
-  <key>CFBundleIdentifier</key><string>dev.lamp.dev.pensive-curie-69cf17.app.newyork</string>
+  <key>CFBundleIdentifier</key><string>dev.lamp.dev.app.newyork</string>
   <key>CFBundleName</key><string>New York</string>
   <key>CFBundleDisplayName</key><string>New York</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -124,7 +124,7 @@ else
 <plist version="1.0"><dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleExecutable</key><string>NewYork</string>
-  <key>CFBundleIdentifier</key><string>dev.lamp.dev.pensive-curie-69cf17.app.newyork</string>
+  <key>CFBundleIdentifier</key><string>dev.lamp.dev.app.newyork</string>
   <key>CFBundleName</key><string>New York</string>
   <key>CFBundleDisplayName</key><string>New York</string>
   <key>CFBundlePackageType</key><string>APPL</string>

@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { createTreeMaterial } from './tsl-materials.js';
 import { groundHeight } from './terrain.js';
+import { polygonBoxOverlaps } from './building-collision.js';
 
 // Seeded street and park trees with three geometry levels, regrouped by spatial cell as the camera moves.
 // Bark tubes and leaf cards share a material; atlas mipmaps preserve leaf coverage at a distance.
@@ -684,8 +685,7 @@ function swayWeight(b, t) {
   }
 }
 
-// Leaf cards of one tree: lod 0 on every twig, lod 1 fewer & larger along the branches, lod 2 a shell of whole-crown
-// cards (far-canopy tile) round the crown ellipsoid
+// Fine twig cards (lod 0), larger branch cards (lod 1), and a canopy shell shared by all levels (lod 2).
 function placeCards(sp, branches, lod, tileMeters, rng, crown) {
   const R = (a, b) => a + (b - a) * rng();
   const cards = [];
@@ -752,7 +752,7 @@ function placeCards(sp, branches, lod, tileMeters, rng, crown) {
   return cards;
 }
 
-// One species / variant: [lod0, lod1, lod2] geometries (lod 2 only for variant 0)
+// One species / variant: [lod0, lod1, lod2] geometries.
 function buildTreeGeometries(speciesIndex, variant, tileMeters) {
   const sp = SPECIES[speciesIndex];
   const seed = 7919 * (speciesIndex + 1) + 104729 * (variant + 1);
@@ -771,27 +771,33 @@ function buildTreeGeometries(speciesIndex, variant, tileMeters) {
   }
   const crown = makeCrown(pts);
 
+  // Keep the canopy's shape, texture orientation and wind phase identical across levels.
+  const canopyRng = mulberry32(seed + 2 * 31337);
+  const canopyCards = placeCards(sp, branches, 2, tileMeters, canopyRng, crown)
+    .map((c) => ({ ...c, mirror: canopyRng() < 0.5, random: canopyRng() }));
+
   const geos = [];
-  const levels = variant === 0 ? [0, 1, 2] : [0, 1];
-  for (const lod of levels) {
+  for (let lod = 0; lod < 3; lod++) {
     const gb = new TreeGeometryBuilder();
     const rng = mulberry32(seed + lod * 31337);
     const aoAt = (p) => crown.barkAO(p);
-    // Bark: lod 0 everything, lod 1 trunk + limbs + branches (coarser), lod 2 trunk + limbs as thin prisms
+    // Small twigs are drawn in the leaf cards; simplify the remaining bark with distance.
     for (const b of branches) {
-      if (lod === 0) {
-        const radial = [9, 6, 4, 3][b.level];
-        addTube(gb, b, radial, 1, aoAt, swayWeight);
-      } else if (lod === 1 && b.level <= 2) {
-        addTube(gb, b, [6, 5, 3][b.level], 2, aoAt, swayWeight);
+      if (lod === 0 && b.level <= 2) {
+        addTube(gb, b, [5, 3, 3][b.level], [2, 3, 4][b.level], aoAt, swayWeight);
+      } else if (lod === 1 && b.level <= 1) {
+        addTube(gb, b, 3, b.level === 0 ? 4 : 8, aoAt, swayWeight);
       } else if (lod === 2 && b.level <= 1) {
-        addTube(gb, b, b.level === 0 ? 5 : 3, b.level === 0 ? 4 : 6, aoAt, swayWeight);
+        addTube(gb, b, 3, b.pts.length - 1, aoAt, swayWeight);
       }
     }
-    const cards = lod === 0 ? cards0 : placeCards(sp, branches, lod, tileMeters, rng, crown);
-    for (const c of cards) addCard(gb, c.at, c.up, c.face, c.size, c.tile, rng() < 0.5, rng(), crown);
+    const cards = (lod === 0 ? cards0 : lod === 1 ? placeCards(sp, branches, lod, tileMeters, rng, crown) : [])
+      .map((c) => ({ ...c, mirror: rng() < 0.5, random: rng() }))
+      .filter((_, i) => i % 2 === 0);
+    for (const c of cards) addCard(gb, c.at, c.up, c.face, c.size, c.tile, c.mirror, c.random, crown);
+    for (const c of canopyCards) addCard(gb, c.at, c.up, c.face, c.size, c.tile, c.mirror, c.random, crown);
     const g = gb.build();
-    g.userData = { species: sp.name, variant, lod, cards: cards.length, triangles: gb.idx.length / 3 };
+    g.userData = { species: sp.name, variant, lod, cards: cards.length + canopyCards.length, triangles: gb.idx.length / 3 };
     geos[lod] = g;
   }
   return geos;
@@ -814,12 +820,50 @@ function hashPos(x, y, z) {
   return s - Math.floor(s);
 }
 
+// Placement checks run once, against nearby buildings and bridge structures.
+function createTreeClearance(colliders) {
+  const cellSize = 64;
+  const cells = new Map();
+  for (const c of colliders) {
+    for (let x = Math.floor(c.minX / cellSize); x <= Math.floor(c.maxX / cellSize); x++) {
+      for (let z = Math.floor(c.minZ / cellSize); z <= Math.floor(c.maxZ / cellSize); z++) {
+        const key = `${x},${z}`;
+        if (!cells.has(key)) cells.set(key, []);
+        cells.get(key).push(c);
+      }
+    }
+  }
+  return (bounds) => {
+    const { min, max } = bounds;
+    for (let x = Math.floor(min.x / cellSize); x <= Math.floor(max.x / cellSize); x++) {
+      for (let z = Math.floor(min.z / cellSize); z <= Math.floor(max.z / cellSize); z++) {
+        for (const c of cells.get(`${x},${z}`) || []) {
+          if (min.y >= c.maxY || max.y <= (c.minY ?? 0)
+            || min.x >= c.maxX || max.x <= c.minX || min.z >= c.maxZ || max.z <= c.minZ) continue;
+          if (c.polygon && !polygonBoxOverlaps(c.polygon, (min.x + max.x) / 2, (min.z + max.z) / 2,
+            (max.x - min.x) / 2, (max.z - min.z) / 2)) continue;
+          if (c.obb) {
+            const o = c.obb;
+            const dx = (min.x + max.x) * 0.5 - o.cx, dz = (min.z + max.z) * 0.5 - o.cz;
+            const hx = (max.x - min.x) * 0.5, hz = (max.z - min.z) * 0.5;
+            // Also test the building's axes, so its enclosing box doesn't block an angled sidewalk.
+            if (Math.abs(dx * o.cs - dz * o.sn) >= o.hx + hx * Math.abs(o.cs) + hz * Math.abs(o.sn)
+              || Math.abs(dx * o.sn + dz * o.cs) >= o.hz + hx * Math.abs(o.sn) + hz * Math.abs(o.cs)) continue;
+          }
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+}
+
 /**
  * Builds the instanced tree field for `sites` ({ x, y, z, scale, species, yaw?, sx?, sz?, tier? }) and keeps each
  * tree's level of detail up to date from the camera of every view pass (scene.onBeforeRender). Returns
- * { group, material, atlas, update(cameraPosition) }.
+ * { group, material, atlas, sites (accepted placements), update(cameraPosition) }.
  */
-function createTreeField(scene, sites) {
+function createTreeField(scene, sites, colliders = []) {
   const group = new THREE.Group();
   group.name = 'Trees';
   const atlas = createLeafAtlas();
@@ -827,20 +871,32 @@ function createTreeField(scene, sites) {
 
   // Geometries: [species][variant][lod]
   const geos = SPECIES.map((_, s) => [0, 1].map((v) => buildTreeGeometries(s, v, atlas.tileMeters)));
+  const clearOfBuildings = createTreeClearance(colliders);
+  const treeBounds = geos.map((variants) => variants.map((levels) => {
+    const bounds = new THREE.Box3();
+    for (const g of levels) bounds.union(g.boundingBox);
+    const height = Math.max(Math.abs(bounds.min.y), Math.abs(bounds.max.y));
+    // Maximum wind sway, with clearance for flutter and facade trim.
+    const margin = Math.hypot(0.2, 0.06) * Math.hypot(0.86, 0.51) * (height / 11) ** 2 + 0.5;
+    return { bounds, margin };
+  }));
+  const worldBounds = new THREE.Box3();
+  const plantedSites = new Set();
 
-  // Per-tree transform & data
-  const N = sites.length;
-  const mats = new Float32Array(N * 16);
-  const data = new Float32Array(N * 4);
-  const px = new Float32Array(N);
-  const py = new Float32Array(N);
-  const pz = new Float32Array(N);
-  const meshOf = new Int32Array(N * 3); // mesh index per level
-  const cellOf = new Array(N);
-  const tier = new Uint8Array(N);
-  const lod = new Uint8Array(N).fill(255);
+  // Allocate for candidate sites; N counts only trees clear of buildings.
+  const capacity = sites.length;
+  let N = 0;
+  const mats = new Float32Array(capacity * 16);
+  const data = new Float32Array(capacity * 4);
+  const px = new Float32Array(capacity);
+  const py = new Float32Array(capacity);
+  const pz = new Float32Array(capacity);
+  const meshOf = new Int32Array(capacity * 3); // mesh index per level
+  const cellOf = new Array(capacity);
+  const tier = new Uint8Array(capacity);
+  const lod = new Uint8Array(capacity).fill(255);
 
-  // Shared geometry types: lod 0 & 1 per species & variant, lod 2 per species
+  // Shared geometry types per species, variant and level.
   const types = [];
   const makeType = (geo, name) => {
     const height = Math.max(Math.abs(geo.boundingBox.min.y), Math.abs(geo.boundingBox.max.y));
@@ -853,7 +909,7 @@ function createTreeField(scene, sites) {
   const meshIndex = SPECIES.map((sp, s) => ({
     l0: [0, 1].map((v) => makeType(geos[s][v][0], `Trees_${sp.name}_v${v}_lod0`)),
     l1: [0, 1].map((v) => makeType(geos[s][v][1], `Trees_${sp.name}_v${v}_lod1`)),
-    l2: makeType(geos[s][0][2], `Trees_${sp.name}_lod2`)
+    l2: [0, 1].map((v) => makeType(geos[s][v][2], `Trees_${sp.name}_v${v}_lod2`))
   }));
   const cells = new Map();
   const meshes = [];
@@ -861,7 +917,7 @@ function createTreeField(scene, sites) {
 
   const dummy = new THREE.Object3D();
   const tint = new THREE.Color();
-  sites.forEach((t, i) => {
+  sites.forEach((t) => {
     const sp = Math.min(SPECIES.length - 1, Math.max(0, t.species || 0));
     const r1 = hashPos(t.x, 1.3, t.z);
     const r2 = hashPos(t.z, 7.1, t.x);
@@ -874,6 +930,11 @@ function createTreeField(scene, sites) {
     dummy.rotation.set(0, t.yaw ?? r2 * Math.PI * 2, 0);
     dummy.scale.set(s * (0.9 + r3 * 0.2) * (t.sx || 1), s * (0.88 + r1 * 0.24), s * (0.9 + r2 * 0.2) * (t.sz || 1));
     dummy.updateMatrix();
+    const tree = treeBounds[sp][variant];
+    worldBounds.copy(tree.bounds).applyMatrix4(dummy.matrix).expandByScalar(tree.margin);
+    if (!clearOfBuildings(worldBounds)) return;
+    const i = N++;
+    plantedSites.add(t);
     dummy.matrix.toArray(mats, i * 16);
     tint.setHex(SPECIES[sp].tints[Math.floor(r3 * 2.999)]).multiplyScalar(0.82 + r1 * 0.36);
     data.set([tint.r, tint.g, tint.b, sp + r2 * 0.999], i * 4);
@@ -894,7 +955,7 @@ function createTreeField(scene, sites) {
     cell.trees.push(i);
     cellOf[i] = cell;
     const mi = meshIndex[sp];
-    const treeTypes = [mi.l0[variant], mi.l1[variant], mi.l2];
+    const treeTypes = [mi.l0[variant], mi.l1[variant], mi.l2[variant]];
     for (let l = 0; l < 3; l++) {
       const type = treeTypes[l];
       let index = cell.meshes.get(type);
@@ -1033,7 +1094,7 @@ function createTreeField(scene, sites) {
     triangles: geos.map((v) => v.map((l) => l.map((g) => g && g.userData.triangles))),
     cards: geos.map((v) => v.map((l) => l.map((g) => g && g.userData.cards)))
   };
-  return { group, material, atlas, update, meshes: instanced, stats };
+  return { group, material, atlas, update, meshes: instanced, stats, sites: plantedSites };
 }
 
 export { createTreeField, createLeafAtlas, buildTreeGeometries, SPECIES as TREE_SPECIES };
