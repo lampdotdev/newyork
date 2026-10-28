@@ -6,7 +6,7 @@ Made with [Lamp](https://lamp.dev), a Mac app that builds apps from a descriptio
 
 ## Remix it with Lamp
 
-With Lamp, choose File → Open from GitHub… and paste this repository's address (`https://github.com/RooCodeInc/lamp-starter-newyork`): you get this exact wish, yours to change by asking, with the credits below kept. Don't have Lamp? [Get it](https://lamp.dev).
+With Lamp, choose File → Open from GitHub… and paste this repository's address (`https://github.com/lampdotdev/newyork`): you get this exact wish, yours to change by asking, with the credits below kept. Don't have Lamp? [Get it](https://lamp.dev).
 
 ## Building it
 
@@ -25,5 +25,5 @@ NYC Open Data is used under its own terms (LicenseRef-NYC-Open-Data).
 
 Terrain Tiles is used under its own terms (LicenseRef-USGS-Public-Domain).
 
-Remixed from [New York](https://github.com/RooCodeInc/lamp-starter-newyork) (a Lamp starter).
+Remixed from [New York](https://github.com/lampdotdev/newyork) (a Lamp starter).
 
