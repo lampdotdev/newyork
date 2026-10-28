@@ -1,0 +1,37 @@
+{
+  "remixOf" : [
+    {
+      "name" : "New York",
+      "starter" : "newyork",
+      "url" : "https://github.com/RooCodeInc/lamp-starter-newyork"
+    }
+  ],
+  "upstream" : [
+    {
+      "author" : "Mr.doob",
+      "commit" : "199f010cf9b35eb58ec934d95eba1ab977c880c1",
+      "license" : "MIT",
+      "licenseFile" : "Web/LICENSE-slop-newyork",
+      "name" : "Slop New York",
+      "url" : "https://github.com/mrdoob/slop-newyork"
+    },
+    {
+      "author" : "OpenStreetMap contributors",
+      "license" : "ODbL-1.0",
+      "name" : "Map data",
+      "url" : "https://www.openstreetmap.org/copyright"
+    },
+    {
+      "author" : "City of New York",
+      "license" : "LicenseRef-NYC-Open-Data",
+      "name" : "NYC Open Data",
+      "url" : "https://opendata.cityofnewyork.us/overview/#termsofuse"
+    },
+    {
+      "author" : "Mapzen, USGS",
+      "license" : "LicenseRef-USGS-Public-Domain",
+      "name" : "Terrain Tiles",
+      "url" : "https://registry.opendata.aws/terrain-tiles/"
+    }
+  ]
+}

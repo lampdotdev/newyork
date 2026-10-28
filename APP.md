@@ -1,0 +1,105 @@
+Kind: game, drawn with three.js (Lamp's runtime in Web/lamp-game.js), at home on the Mac.
+Look: a sunlit 3D Manhattan at true scale, with a translucent dark heads-up display over it: the place and street at the
+bottom left over a minimap, the modes (Walk, Drive, Cycle, Fly) at the bottom, the vehicle and its speed at the bottom
+right, and time of day, Teleport, Map and sound at the top right.
+
+# New York
+
+Slop New York by Mr.doob (MIT, `Web/LICENSE-slop-newyork`): all of Manhattan from Harlem to the Battery, every
+street and avenue where it really is, with landmarks, Central Park, piers, the other boroughs and New Jersey across the
+water in less detail, street lights and signals all over Manhattan, traffic that keeps to its lanes and lights (and
+honks when hit), people on the sidewalks who jump out of the way of a car, and trees.
+
+- **Getting around**: 1 walk, 2 drive a yellow cab, 3 cycle, 4 fly a sightseeing helicopter. W A S D or the arrows
+  (no boost: holding forward builds a walk into a run, and the cab and the bike keep accelerating to their top
+  speed), Space or E up and Q or C down in the helicopter, B horn. Dragging orbits the camera.
+- **Cameras**: V (Shift-V back) or 5 to 0: the chase camera, an action camera, first person and scenic ones on Fifth
+  Avenue, Times Square and the Chrysler Building.
+- **The city**: time of day (golden hour, midday, dusk, night) from the buttons at the top, Teleport to a landmark, M
+  the full map, H hides the HUD, N sound on or off. Every sound is synthesized.
+- **A controller** paired with the device works too (`gamepad-controls.js`, from the original, reading the first pad Lamp's
+  runtime gives each frame, which is also how Lamp's preview drives it): left stick move or steer,
+  right stick look, RT and LT gas and brake (up and down in the helicopter), A jump, LB and RB change mode, Y
+  the camera, R3 recentres it, the d-pad zooms, Menu the map and B closes it.
+- The guide to the controls over the modes, and the keys on the HUD's buttons, show what the player is holding:
+  keys on the keyboard, the controller's own buttons (an Xbox's, a PlayStation's or a Switch's) once one is played
+  with, and on a touch screen the touch controls instead (`input()`, `label()` and `glyph()` from lamp-game.js, in
+  `controlHints`, `renderControlHints` and `relabelKeys` in main.js; `data-key` and `data-pad` on a `kbd` in index.html).
+  A new control goes in `controlHints` with its keys' codes and its pad's button, never as a name written out.
+- The game remembers where the player was and in what between launches (`save('player')` from lamp-game.js).
+
+## Code
+
+- The page is `Web/`: `index.html` the page and the HUD's markup, `css/style.css` the HUD's look. Lamp's files beside
+  it are `lamp-game.js` (the runtime: the frame, the pads, saves), `lamp.js` and `three/` (three.js with its WebGPU
+  renderer and node materials, `three/webgpu` and `three/tsl`, drawing with WebGL 2), loaded through the import map.
+- `Web/js`, all ES modules:
+  - `main.js`: start-up, `QUALITY` (what's drawn), the HUD, keys, and `frame(f)`, which Lamp's runtime calls about 60
+    times a second (`game({ renderer, init, frame, touch: false, keyboard: false, snapshot })`: the city reads its own
+    keys and draws its own touch controls; a controller comes as the first pad; after a change of code `init` starts
+    the city where `snapshot()` left it, full map and hidden HUD included). Lamp draws it at 1920x1080 and fits that to the window.
+  - The place: `nyc-geodata.js` (the real geography, generated data: don't edit by hand), `city-config.js` (streets,
+    avenues, parks, shores in meters), `city-grid.js` and `buildings.js` (blocks and buildings), `landmarks.js`,
+    `boroughs.js`, `road-network.js`, `road-paint.js`, `street-details.js` (lamps, signs, hydrants) and `trees.js`.
+  - Looks: `tsl-materials.js` (every material, in TSL), `lighting.js` (`TIME_PRESETS`: sun, sky, fog for each time
+    of day), `post-processing.js` (glow and color grading), `vehicle-lights.js`.
+  - Things that move: `controllers.js` (the four ways to move, their physics and keys), `traffic.js` (cars and buses),
+    `vehicle-physics.js` (how vehicles hit and push each other), `pedestrian-system.js` (the people around the player,
+    how they cross and dodge), `pedestrians.js` (their bodies and gait) and `pedestrian-routes.js`, `actor-models.js` (cars,
+    people, the bike and the helicopter, built from shapes in code).
+  - `cameras.js`, `nyc-map.js` (the minimap and the full map), `scene-culling.js`, `audio-*.js` (the synthesized
+    sounds), `gamepad-controls.js`, `touch-controls.js` (shown on a touch screen).
+  - The ground: `terrain.js`. The city is built flat at street level (y = 0) and then set on the real ground's heights:
+    `groundHeight(x, z)` is the one answer to "how high is the ground here", and everything asks it. `setOnTerrain`
+    (called in main.js once the city is built) cuts the ground layers finer where the ground bends and lays them on
+    it, and lifts whatever stands on it whole; buildings and landmarks stand on the lowest ground under their lot
+    (`groundUnder`), and the facade shader counts storeys from there (the `ground` attribute of `createFacadeBoxes`).
+    Cars, bikes, people, the helicopter's skids and the cameras follow it each frame; cars tilt with the slope
+    (`groundTilt`). Heights ease to 0 near the water, so the seawalls, waterfront highways, piers and bridge landings
+    stay at the waterline. Something new that stands on the street: build it at y = 0 as before, and add
+    `groundHeight(x, z)` where it's placed (or leave it in a group setOnTerrain sets).
+
+## Data
+
+Everything ships with the game and nothing is fetched while it runs. No key or account.
+
+- `Web/js/nyc-geodata.js`: the city's map, generated by `tools/build-geodata.mjs` in Mr.doob's repository
+  (https://github.com/mrdoob/slop-newyork/tree/main/tools, not in this app) from NYC Open Data (street centrelines,
+  borough boundaries, parks) and OpenStreetMap (Central Park, piers, landmark outlines). It's in the game's world frame:
+  1 unit = 1 m, x along the street grid's east, z grid south, the origin at the centreline of 5th Ave & 42nd St, the
+  axes turned 29.02° from true north (`GEO.frame`). Latitude 40.75318, longitude -73.98185 is the plane's center.
+- `Web/data/elevation.bin.gz`: the ground's heights over Manhattan, 8 m apart, from the open Terrain Tiles on AWS
+  (bare earth from USGS 3DEP; credit "Terrain Tiles: Mapzen, USGS"), made by `Assets/Tools/build-elevation.mjs`
+  (`node Assets/Tools/build-elevation.mjs`, Node 22, fetches about 100 tiles). It samples only inside Manhattan's
+  outline, smooths the survey's noise and eases heights to 0 within 110 m of the water.
+
+### Moving the game to another place
+
+The city is New York's in many places, so another place is a big change, not a setting:
+
+1. The map: make a `*-geodata.js` of the new place in the same shape as `nyc-geodata.js` (its `GEO` keys: streets,
+   avenues, roads, blocks, parks, the land's outline, piers, landmark points), in a frame of its own (a center
+   latitude and longitude, and a bearing that lines the main street grid up with x and z). Mr.doob's
+   `tools/build-geodata.mjs` and its `geo-*.mjs` show how; outside New York, OpenStreetMap through the Overpass API
+   stands in for NYC Open Data.
+2. What's New York's by name: `city-config.js` (the avenue and street names, `LANDMARK_SITES`, `TELEPORT_LOCATIONS`,
+   Central Park's and the islands' outlines), `landmarks.js` (the Empire State Building and the others, modeled by
+   hand), `boroughs.js` (the land around Manhattan and its bridges), and the names in `nyc-map.js` and the HUD.
+3. The ground: in `Assets/Tools/build-elevation.mjs`, set `LAT0`/`LON0` and the bearing to the new frame, `OUTLINES`
+   to the new land, and `KNOWN` to a few landmarks the new data places (it checks the frame against them), then run
+   it. Terrain Tiles cover the whole world.
+4. Where the player starts: each vehicle's spawn point in `controllers.js`. Clear the saved spot (`load('player')` in
+   `main.js`), or the game goes back to a place in the old city.
+
+## Easy to change
+
+- Time of day and the sky's colors: `TIME_PRESETS` in `lighting.js`.
+- How a building, the roads or the park look: `tsl-materials.js`, `buildings.js`.
+- The vehicles: `actor-models.js`; how they drive, fly and how fast: `controllers.js`.
+- How busy the streets are: the counts in `traffic.js` and `pedestrian-system.js`.
+- The HUD: `index.html` and `css/style.css`.
+- What's drawn: `QUALITY` in `main.js`. Street lights and reflections add several seconds to the start and are off.
+
+Keep it smooth: try changes that draw more with the frame rate in the top left, and keep new geometry instanced or
+merged like the rest. The whole city is built before the first frame, about half a minute in Lamp's preview: a look
+takes that long. A change reopens the game, which comes back where the player was.
