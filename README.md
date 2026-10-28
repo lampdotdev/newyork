@@ -13,7 +13,7 @@
 It's yours to change by asking Lamp. A few places to start:
 
 - Make it a snowy winter night
-- Add taxi fares against the clock
+- Make it a lot more fun
 - Move the city to the Moon
 
 ## Remix it with Lamp
