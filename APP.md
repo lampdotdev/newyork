@@ -122,4 +122,13 @@ The city is New York's in many places, so another place is a big change, not a s
 
 Keep it smooth: try changes that draw more with the frame rate in the top left, and keep new geometry instanced or
 merged like the rest. The whole city is built before the first frame, about half a minute in Lamp's preview: a look
-takes that long. A change reopens the game, which comes back where the player was.
+takes that long.
+
+Most changes go into the city as it's played, with nothing built again and the player where they are: the HUD's look
+(`css/style.css`), how the player moves and the vehicles' tuning (`controllers.js`), the cameras (`cameras.js`), the
+time presets (`lighting.js`), the map's drawing (`nyc-map.js`) and the controller (`gamepad-controls.js`), each a class
+in a module ending with `hot(import.meta).accept()` from lamp-game.js ("Changes while it's played" there). What their
+constructors built once (the vehicles' bodies, the keys, the map's buttons) and everything else (the city's modules,
+`main.js`, `index.html`) is built as the game starts: a change to it opens the game again, which comes back where the
+player was. Something new that changes as it's played (a mission, a race) goes in a module of its own the same way, a
+class `main.js` makes one of.

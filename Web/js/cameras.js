@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { bryantParkLawn } from './landmarks.js';
 import { groundHeight } from './terrain.js';
+import { hot } from '../lamp-game.js';
 
 // Lamp: scenic views placed at street level, which stand on the ground where they are
 const STREET_VIEWS = new Set(['centralPark', 'fifthAve', 'timesSquare', 'chryslerGCT', 'observatory']);
@@ -372,5 +373,9 @@ class CameraSystem {
     this.camera.lookAt(this.currentLookAt);
   }
 }
+
+// Lamp: a change to how the cameras follow and frame the player, or to CAMERA_PRESETS, goes into the running city; one
+// to the drag and wheel handling the constructor set up opens the page again.
+hot(import.meta).accept((next, { changed }) => !changed.some((name) => /\.bindPointerControls$/.test(name)));
 
 export { CAMERA_PRESETS, CameraSystem };

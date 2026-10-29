@@ -28,6 +28,7 @@ import {
   isTypingInField
 } from './city-config.js';
 import { groundHeight } from './terrain.js';
+import { hot } from '../lamp-game.js';
 
 // Minimap and full-screen map drawn from the same geography and building footprints as the 3D city.
 // World frame: 1 unit = 1 m, x = Manhattan-grid east, z = grid south. Both maps face grid north,
@@ -1277,5 +1278,9 @@ class NYCMapSystem {
     ctx.fillText(label, x0 + len + 8, y0 + 3);
   }
 }
+
+// Lamp: a change to how the minimap and the full map are drawn goes into the running city; one to the buttons, keys
+// and dragging the constructor set up opens the page again.
+hot(import.meta).accept((next, { changed }) => !changed.some((name) => /\.initEvents$/.test(name)));
 
 export { NYCMapSystem };
