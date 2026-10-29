@@ -335,9 +335,9 @@
   <button type="button" class="lamp-remix-pick">Make it a snowy winter night</button><button type="button" class="lamp-remix-pick">Make it a lot more fun</button><button type="button" class="lamp-remix-pick">Move the city to the Moon</button>
   <textarea id="lamp-remix-ask" rows="3" placeholder="Or say it your way"></textarea>
   <button type="button" id="lamp-remix-go" disabled>Continue with Lamp</button>
-  <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it makes its own version and changes it as you ask.</p>
+  <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it opens a copy of New York with your request ready to send.</p>
 </div>
-<script type="application/json" id="lamp-remix-target">{"link":null,"request":"Make an app like New York: Mr.doob's Slop New York: explore Manhattan on foot, by car, by bike or by helicopter.\n\nThen: {ask}"}</script>
+<script type="application/json" id="lamp-remix-target">{"origin":{"starter":"newyork"},"request":"Make an app like New York: Mr.doob's Slop New York: explore Manhattan on foot, by car, by bike or by helicopter.\n\nThen: {ask}","link":null}</script>
 <script>
 (function(){var o=document.getElementById('lamp-remix-open'),p=document.getElementById('lamp-remix'),a=document.getElementById('lamp-remix-ask'),g=document.getElementById('lamp-remix-go');
 if(!o||!p||!a||!g)return;var t=JSON.parse(document.getElementById('lamp-remix-target').textContent||'{}');
@@ -346,7 +346,9 @@ document.getElementById('lamp-remix-close').addEventListener('click',function(){
 var picks=p.querySelectorAll('.lamp-remix-pick');for(var i=0;i<picks.length;i++)picks[i].addEventListener('click',function(e){a.value=e.currentTarget.textContent;g.disabled=false;a.focus();});
 a.addEventListener('input',function(){g.disabled=!a.value.trim();});
 g.addEventListener('click',function(){var ask=a.value.trim().slice(0,1000);if(!ask)return;
-  var u=new URL(t.link||'https://lamp.dev/');u.searchParams.set('ask',t.link?ask:String(t.request||'{ask}').replace('{ask}',ask));window.open(u.href,'_blank','noopener');});})();
+  var f=t.origin&&typeof t.origin==='object'?t.origin:null,u=new URL(f?'https://lamp.dev/':(t.link||'https://lamp.dev/'));
+  if(f)for(var k in f)u.searchParams.set(k,String(f[k]));u.searchParams.set('from','page');
+  u.searchParams.set('ask',f||t.link?ask:String(t.request||'{ask}').replace('{ask}',ask));window.open(u.href,'_blank','noopener');});})();
 </script>
 <style>
 #lamp-credit{position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:2147483647;width:max-content;
