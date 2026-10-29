@@ -4,21 +4,21 @@
 
 <p align="center">Mr.doob's Slop New York: explore Manhattan on foot, by car, by bike or by helicopter.</p>
 
-<p align="center"><a href="https://lampdotdev.github.io/newyork/"><b>Play it in your browser</b></a> · <a href="#remix-it-with-lamp">Remix it with Lamp</a></p>
+<p align="center"><a href="https://lampdotdev.github.io/newyork/"><img src=".github/play-in-browser.svg" width="220" height="48" alt="Play in your browser"></a>&nbsp;&nbsp;<a href="https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&amp;from=readme"><img src=".github/open-in-lamp.svg" width="164" height="48" alt="Open in Lamp"></a></p>
 
 <p align="center"><img src=".github/preview.png" width="720" alt="New York"></p>
 
 ## Make New York yours
 
-It's yours to change by asking Lamp. A few places to start:
+Each opens Lamp with a copy of New York and that change, ready to send:
 
-- Make it a snowy winter night
-- Make it a lot more fun
-- Move the city to the Moon
+- [Make it a snowy winter night](https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&from=readme&ask=Make%20it%20a%20snowy%20winter%20night)
+- [Make it a lot more fun](https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&from=readme&ask=Make%20it%20a%20lot%20more%20fun)
+- [Move the city to the Moon](https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&from=readme&ask=Move%20the%20city%20to%20the%20Moon)
 
-## Remix it with Lamp
+## Open it in Lamp
 
-[Lamp](https://lamp.dev) is a Mac app that builds apps from a description and changes them as you ask. In Lamp, choose File → Open from GitHub… and paste `https://github.com/lampdotdev/newyork`: you get this exact wish, yours to change, with the credits below kept.
+[Lamp](https://lamp.dev) is a Mac app that builds apps from a description and changes them as you ask. [Open New York in Lamp](https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&from=readme) for a copy of your own, to use and to change as you like, with the credits below kept. Or, in Lamp, choose File → Open from GitHub… and paste `https://github.com/lampdotdev/newyork`.
 
 ## Building it
 
