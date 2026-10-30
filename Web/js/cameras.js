@@ -387,6 +387,8 @@ class CameraSystem {
 // Lamp: a change to how the cameras follow and frame the player, or to CAMERA_PRESETS, goes into the running city; one
 // to the drag and wheel handling the constructor set up opens the page again.
 live.accept((next, { changed }) => {
+  // The camera is kept while the game's code runs again, which makes it anew once this file has changed.
+  if (changed.includes('CameraSystem.makeCamera')) return false;
   if (changed.some((name) => /\.bindPointerControls$/.test(name))) return false;
   // The field of view is copied from the preset as it's chosen: the one in use takes the new preset now.
   for (const system of systems) system.setCameraPreset(system.activePresetId);

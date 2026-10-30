@@ -108,14 +108,15 @@ async function initApp() {
   // 2. Scene, atmosphere and lighting
   await showLoadingStage('Creating sky and environment lighting...');
   const scene = live.keep('scene', () => new THREE.Scene());
+  // What the run before put in the scene goes first, so the lights built here own only what they add: each part of the
+  // city comes back below, and the rest is made again.
+  scene.clear();
+  scene.matrixWorldAutoUpdate = true;
   const lighting = live.keep('lighting', () => {
     const made = new LightingSystem(scene, renderer);
     const own = [...scene.children];
     return { made, own, dispose() { for (const object of own) object.removeFromParent(); } };
   }, { inputs: [scene, renderer] });
-  // What the run before put in the scene goes: each part of the city comes back below, and the rest is made again.
-  scene.clear();
-  scene.matrixWorldAutoUpdate = true;
   scene.add(...lighting.own);
   const lightingSystem = lighting.made;
   markInit('lighting');
