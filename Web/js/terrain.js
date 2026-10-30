@@ -10,7 +10,7 @@
 
 import * as THREE from 'three/webgpu';
 import { float, texture, uniform, vec2 } from 'three/tsl';
-import { hot } from '../lamp-game.js';
+import { hot, asset } from '../lamp-game.js';
 
 let grid = null; // { x0, z0, step, cols, rows, heights: Float32Array }
 
@@ -21,11 +21,16 @@ async function loadTerrain(url = './data/elevation.bin.gz') {
   return grid;
 }
 
+// Read through Lamp's runtime (asset()), so a change to the file builds the kept heights, and the city on them, again.
 async function readHeights(url) {
   try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`${response.status}`);
-    const bytes = await new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    const packed = await asset(url);
+    if (!packed) throw new Error('not found');
+    // A server that sends .gz as Content-Encoding: gzip hands over bytes the browser has already inflated
+    const head = new Uint8Array(packed, 0, 2);
+    const bytes = head[0] === 0x1f && head[1] === 0x8b
+      ? await new Response(new Response(packed).body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
+      : packed;
     if (new TextDecoder().decode(new Uint8Array(bytes, 0, 4)) !== 'ELV2') throw new Error('unknown format');
     const [x0, z0, step, cols, rows] = new Float32Array(bytes, 4, 6);
     const centimetres = new Uint16Array(bytes, 28, cols * rows);
