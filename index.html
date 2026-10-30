@@ -332,12 +332,12 @@
 <div id="lamp-remix" hidden>
   <div class="lamp-remix-head">Make New York yours<button type="button" id="lamp-remix-close" aria-label="Close">×</button></div>
   <p>Say what you'd change. Lamp makes the change and keeps your data.</p>
-  <button type="button" class="lamp-remix-pick">Make it a snowy winter night</button><button type="button" class="lamp-remix-pick">Make it a lot more fun</button><button type="button" class="lamp-remix-pick">Move the city to the Moon</button>
+  <button type="button" class="lamp-remix-pick">Give me a sports car</button><button type="button" class="lamp-remix-pick">Let me pick up taxi fares</button><button type="button" class="lamp-remix-pick">Let me play as a monster</button>
   <textarea id="lamp-remix-ask" rows="3" placeholder="Or say it your way"></textarea>
   <button type="button" id="lamp-remix-go" disabled>Continue with Lamp</button>
   <p class="lamp-remix-note">Opens lamp.dev with your request. Lamp is a free Mac app; it opens a copy of New York with your request ready to send.</p>
 </div>
-<script type="application/json" id="lamp-remix-target">{"origin":{"starter":"newyork"},"request":"Make an app like New York: Mr.doob's Slop New York: explore Manhattan on foot, by car, by bike or by helicopter.\n\nThen: {ask}","link":null}</script>
+<script type="application/json" id="lamp-remix-target">{"request":"Make an app like New York: Mr.doob's Slop New York: explore Manhattan on foot, by car, by bike or by helicopter.\n\nThen: {ask}","link":null,"origin":{"starter":"newyork"}}</script>
 <script>
 (function(){var o=document.getElementById('lamp-remix-open'),p=document.getElementById('lamp-remix'),a=document.getElementById('lamp-remix-ask'),g=document.getElementById('lamp-remix-go');
 if(!o||!p||!a||!g)return;var t=JSON.parse(document.getElementById('lamp-remix-target').textContent||'{}');

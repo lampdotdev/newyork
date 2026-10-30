@@ -1,5 +1,5 @@
 import { isTypingInField } from './city-config.js';
-import { BUTTON } from '../lamp-game.js';
+import { BUTTON, hot } from '../lamp-game.js';
 
 const DEAD_ZONE = 0.15;
 const BUTTON_COUNT = 17;
@@ -181,5 +181,8 @@ class GamepadControls {
     this.camera.applyGamepadInput(look.x, look.y, zoom, Number.isFinite(dt) ? Math.max(0, Math.min(0.1, dt)) : 0);
   }
 }
+
+// Lamp: a change to how the controller is read goes into the running city (lamp-game.js, "Changes while it's played").
+hot(import.meta).accept();
 
 export { GamepadControls };

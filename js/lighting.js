@@ -22,6 +22,12 @@ import { SunLight } from 'three/addons/lights/SunLight.js';
 import { SunLightNode } from 'three/addons/lights/SunLightNode.js';
 import { cityUniforms } from './tsl-materials.js';
 import { groundHeight } from './terrain.js';
+import { hot } from '../lamp-game.js';
+
+// Lamp: the lighting systems made, kept through a change of this file (lamp-game.js, "Changes while it's played"), so
+// a new TIME_PRESETS is put on the sky at once (the end of this file).
+const live = hot(import.meta);
+const systems = (live.data.systems ??= new Set());
 
 // Atmospheric sky, environment lighting, sunlight and time-of-day presets.
 
@@ -130,6 +136,7 @@ const TIME_PRESETS = {
 
 class LightingSystem {
   constructor(scene, renderer = null) {
+    systems.add(this);
     this.scene = scene;
     this.activePresetId = 'golden';
 
@@ -306,5 +313,12 @@ class LightingSystem {
     this.sunLight.shadow.camera.far = Math.max(300, Math.min(720, 260 + altitude * 1.6));
   }
 }
+
+// Lamp: a change to the time presets or how they're put on the city goes into the running city, at the time of day the
+// player is in; one to what the constructor built (the sun, the sky, the fog's shader) opens the page again.
+live.accept((next, { changed }) => {
+  if (changed.some((name) => /\.(createAerialFogNode)$/.test(name))) return false;
+  for (const system of systems) system.applyPreset(system.activePresetId, true);
+});
 
 export { LightingSystem };
