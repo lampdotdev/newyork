@@ -28,17 +28,21 @@ const CAMERA_PRESETS = [
 ];
 
 class CameraSystem {
-  constructor(domElement, controllerManager) {
-    systems.add(this);
-    this.domElement = domElement;
-    this.controllerManager = controllerManager;
-
-    this.camera = new THREE.PerspectiveCamera(
+  static makeCamera() {
+    return new THREE.PerspectiveCamera(
       56,
       window.innerWidth / window.innerHeight,
       0.35,
       60000 // at 1:1 the boroughs & harbor run out ~20-40 km to the fogged horizon (reversed float depth keeps precision)
     );
+  }
+
+  constructor(domElement, controllerManager, camera = CameraSystem.makeCamera()) {
+    systems.add(this);
+    this.domElement = domElement;
+    this.controllerManager = controllerManager;
+
+    this.camera = camera;
 
     this.activePresetId = 'chase';
     this.orbitYawOffset = 0.0;
@@ -383,6 +387,8 @@ class CameraSystem {
 // Lamp: a change to how the cameras follow and frame the player, or to CAMERA_PRESETS, goes into the running city; one
 // to the drag and wheel handling the constructor set up opens the page again.
 live.accept((next, { changed }) => {
+  // The camera is kept while the game's code runs again, which makes it anew once this file has changed.
+  if (changed.includes('CameraSystem.makeCamera')) return false;
   if (changed.some((name) => /\.bindPointerControls$/.test(name))) return false;
   // The field of view is copied from the preset as it's chosen: the one in use takes the new preset now.
   for (const system of systems) system.setCameraPreset(system.activePresetId);

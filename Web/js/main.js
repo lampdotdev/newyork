@@ -28,8 +28,9 @@ import { CityAudioSystem } from './audio-system.js';
 // Lamp: a change that can't be swapped into the running city runs this file's code again in place (lamp-game.js,
 // "Running the game's code again"). What's slow to make is kept through that with live.keep: the renderer and its
 // compiled shaders, the ground's heights (terrain.js) and each part of the city, which is built again only when its own
-// code, or a part it's built from (its `inputs`), changed. Everything else here (the HUD, the controllers, the
-// cameras, the lighting, the sound) is made again from the page as it is now.
+// code, or a part it's built from (its `inputs`), changed. The scene, the camera and the lights are kept too: three.js
+// works out how to draw every object anew for a new one of them, which held the game still for a second at each change.
+// Everything else here (the HUD, the controllers, the sound) is made again from the page as it is now.
 const live = hot(import.meta);
 
 async function initApp() {
@@ -106,8 +107,18 @@ async function initApp() {
 
   // 2. Scene, atmosphere and lighting
   await showLoadingStage('Creating sky and environment lighting...');
-  const scene = new THREE.Scene();
-  const lightingSystem = new LightingSystem(scene, renderer);
+  const scene = live.keep('scene', () => new THREE.Scene());
+  // What the run before put in the scene goes first, so the lights built here own only what they add: each part of the
+  // city comes back below, and the rest is made again.
+  scene.clear();
+  scene.matrixWorldAutoUpdate = true;
+  const lighting = live.keep('lighting', () => {
+    const made = new LightingSystem(scene, renderer);
+    const own = [...scene.children];
+    return { made, own, dispose() { for (const object of own) object.removeFromParent(); } };
+  }, { inputs: [scene, renderer] });
+  scene.add(...lighting.own);
+  const lightingSystem = lighting.made;
   markInit('lighting');
 
   // Lamp: the ground's real heights, which everything below is set on (terrain.js)
@@ -228,7 +239,7 @@ async function initApp() {
     } catch { /* Storage may be disabled or full. */ }
   }
 
-  const cameraSystem = new CameraSystem(renderer.domElement, controllerManager);
+  const cameraSystem = new CameraSystem(renderer.domElement, controllerManager, live.keep('camera', () => CameraSystem.makeCamera()));
   cameraSystem.onResize(1920, 1080);
   const touchControls = new TouchControls(controllerManager);
   const soundButton = document.getElementById('btn-sound');
