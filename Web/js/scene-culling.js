@@ -144,7 +144,8 @@ function replaceWithChunks(mesh, cell) {
 
 /**
  * Sets up the culling of the static city under `roots` (Object3Ds). `shadow` is the SunLightShadow whose cascade
- * cameras render the shadow stand-ins (none are made without it). Per-frame culling runs in updateSceneCulling().
+ * cameras render the shadow stand-ins (none are made without it), or true to make them for showShadowStandIns() to
+ * show. Returns what it culls, which updateSceneCulling() culls every frame.
  */
 function setupSceneCulling(scene, roots, shadow = null) {
   scene.updateMatrixWorld(true);
@@ -179,15 +180,8 @@ function setupSceneCulling(scene, roots, shadow = null) {
   }
 
   // 2. Shadow stand-ins for the big static casters
-  const cams = [];
-  if (shadow && typeof shadow.getCamera === 'function') {
-    const count = typeof shadow.getViewportCount === 'function' ? shadow.getViewportCount() : 2;
-    for (let i = 0; i < count; i++) {
-      const cam = shadow.getCamera(i);
-      if (cam && cam.layers) cams.push(cam);
-    }
-  }
-  if (cams.length) {
+  const cams = shadowCameras(shadow);
+  if (cams.length || shadow === true) {
     const instancedBySig = new Map(); // geometry signature + face side -> { geometry, material, cells: Map(key -> [matrices]) }
     const triCells = new Map(); // face side -> Map(key -> number[] world positions)
     const proxyMaterials = new Map();
@@ -322,10 +316,34 @@ function setupSceneCulling(scene, roots, shadow = null) {
     if (!mesh.castShadow) replaceWithChunks(mesh, STATIC_CELL);
   }
 
-  state.culled = culled;
+  state.culled.push(...culled);
+  return culled;
 }
 
 const state = { culled: [] };
+
+// The sun shadow's cascade cameras, which render the stand-ins.
+function shadowCameras(shadow) {
+  const cams = [];
+  if (shadow && typeof shadow.getCamera === 'function') {
+    const count = typeof shadow.getViewportCount === 'function' ? shadow.getViewportCount() : 2;
+    for (let i = 0; i < count; i++) {
+      const cam = shadow.getCamera(i);
+      if (cam && cam.layers) cams.push(cam);
+    }
+  }
+  return cams;
+}
+
+// Lamp: a part of the city kept while main.js runs again (lamp-game.js, "Running the game's code again") was cut up
+// by an earlier run of this module: its chunks are culled again from here, and its stand-ins drawn in the new sun's
+// shadow.
+function cullAlso(culled) {
+  state.culled.push(...culled);
+}
+function showShadowStandIns(shadow) {
+  for (const cam of shadowCameras(shadow)) cam.layers.enable(SHADOW_PROXY_LAYER);
+}
 
 // Per frame (after the warm-up frame, which must see everything): hide the chunks beyond their cull distance
 function updateSceneCulling(cameraPosition) {
@@ -338,4 +356,4 @@ function updateSceneCulling(cameraPosition) {
   }
 }
 
-export { setupSceneCulling, updateSceneCulling, SHADOW_PROXY_LAYER };
+export { setupSceneCulling, updateSceneCulling, cullAlso, showShadowStandIns, SHADOW_PROXY_LAYER };
