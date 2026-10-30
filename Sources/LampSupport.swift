@@ -17,6 +17,7 @@
     #endif
     import UniformTypeIdentifiers
     import UserNotifications
+    import AVFoundation
     #if canImport(CloudKit)
     import CloudKit
     #endif
@@ -190,8 +191,17 @@
                 throw LampAI.Failure(message: "Couldn't reach Lamp, and this phone has no key of its own yet. Open the app once while Lamp is reachable.",
                                      needsSetup: .text)
             }
-            // What the phone carries answers all three.
-            if path == "/ai/status" { return ["text": true, "decisions": true, "pictures": true] }
+            // What the phone carries answers all three. Actions need Lamp, whatever the phone carries.
+            if path == "/ai/status" {
+                let away: [String: Any] = ["available": true, "route": "OpenRouter, from this phone", "where": "remote"]
+                return ["text": true, "decisions": true, "pictures": true, "act": false,
+                        "details": ["text": away, "decisions": away, "pictures": away,
+                                    "act": ["available": false, "where": "unknown", "setup": "openLamp",
+                                            "reason": "Asking the app to do things needs Lamp: use it on the same Wi‑Fi as the Mac."] as [String: Any]]]
+            }
+            if path == "/ai/act" {
+                throw LampAI.Failure(message: "Couldn't reach Lamp, and asking the app to do things needs it. Try again on the same Wi‑Fi as the Mac.")
+            }
             fputs("LampAI \(path): Lamp isn't reachable, using the key kept on this phone\n", stderr)
             switch path {
             case "/ai":
@@ -544,6 +554,7 @@
     struct LampCommands: Commands {
         init() {
             LampRuntime.start
+            LampShowcase.start
             LampWindows.start
             LampWidget.start
             LampMagic.start
@@ -553,6 +564,9 @@
         }
 
         var body: some Commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About \(LampAbout.name)") { LampAbout.show() }
+            }
             CommandGroup(after: .appInfo) {
                 Button("Customize with Lamp…") {
                     LampSidebar.openFromMenu()
@@ -562,6 +576,41 @@
             CommandGroup(after: .saveItem) {
                 Button("Share…") { LampShareApp.share() }
             }
+        }
+    }
+
+    /// The About window, with the app's credits as Lamp has them now. The Credits.html written into the bundle is only
+    /// as new as the app's install, and a credit added while the app is open (work brought in with a change that went
+    /// into the running app, with no install) would wait for the next one; Lamp answers from the wish's credits.json.
+    /// With no answer from Lamp (it isn't open, or this app isn't its), it's the bundle's page, as macOS shows it.
+    @MainActor enum LampAbout {
+        static var name: String {
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+                ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? ProcessInfo.processInfo.processName
+        }
+
+        static func show() {
+            Task {
+                let credits = await ask()
+                NSApp.activate()
+                NSApp.orderFrontStandardAboutPanel(options: credits.map { [.credits: $0] } ?? [:])
+            }
+        }
+
+        /// The credits page Lamp has for this app now; empty when it has none, nil when Lamp didn't answer.
+        private static func ask() async -> NSAttributedString? {
+            guard let url = URL(string: lampGateway + "/app/credits") else { return nil }
+            // Short: the window is opened by a click, and the bundle's page is there to fall back on.
+            var request = URLRequest(url: url, timeoutInterval: 1.5)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Bearer \(LampInstall.token)", forHTTPHeaderField: "Authorization")
+            request.httpBody = Data("{}".utf8)
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  let answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+            guard let page = answer["page"] as? String else { return NSAttributedString() }
+            return NSAttributedString(html: Data(page.utf8), documentAttributes: nil)
         }
     }
 
@@ -3864,7 +3913,9 @@
             // ...and stops part way through when the person takes the app back with Lamp's Stop.
             DistributedNotificationCenter.default().addObserver(
                 forName: Notification.Name(LampInstall.note + "useAppStop." + LampInstall.slug), object: nil, queue: .main) { note in
-                let id = note.userInfo?["id"] as? String, signature = note.userInfo?["lampUseAppStop"] as? String
+                // Under a key long enough to be kept whole in the binary, which Lamp looks for (a name of 15 bytes or
+                // fewer is compiled into the code itself, so the old key's wasn't always found).
+                let id = note.userInfo?["id"] as? String, signature = note.userInfo?["lampUseAppStopSignature"] as? String
                 MainActor.assumeIsolated { LampDriver.Handover.stop(id: id, signature: signature, token: LampInstall.token) }
             }
             // ...and, before it asks the app to quit for a rebuild, whether it still answers, so it can tell the
@@ -3911,6 +3962,13 @@
         /// then calls `done`. An app may picture its own windows without screen recording permission.
         @MainActor
         static func snapshot(then done: (@MainActor () -> Void)? = nil) {
+            // A page's things are read in the page, which answers a moment later.
+            guard let refresh = LampPageItems.refresh else { return snapshotNow(then: done) }
+            refresh { snapshotNow(then: done) }
+        }
+
+        @MainActor
+        private static func snapshotNow(then done: (@MainActor () -> Void)?) {
             LampDriver.keepBarPanel()
             let windows = windowsOnScreen
             guard !windows.isEmpty else { done?(); return }   // nothing on screen: keep the last pictures
@@ -4576,8 +4634,165 @@
     /// first change of each launch, the database is copied to Backups/ (the newest 20 are kept). Anything this
     /// version of the app can't read is left untouched: the user is told once, and it loads again once fixed.
     /// `folder` suits other files the app keeps, such as images (store their names, not their bytes).
+    /// Showcase mode, for a reel of the app. Launched with LAMP_SHOWCASE set to a folder holding a showcase.json (its
+    /// storyboard, with any files it brings), the app keeps its data in that folder, takes its AI's answers, its location
+    /// and the person's spoken lines from the script, and sends no notifications and runs no schedules; on a Mac it then
+    /// plays the script's `steps` on its own window (`LampDriver.playShowcase`). What happens is logged to events.tsv
+    /// with the time, for the reel's edit to put the sound, captions and camera where it happened. Nothing of the
+    /// person's is read, so the reel shows none of it.
+    ///
+    /// The app's own microphone, camera or speech code asks the script while it's on:
+    ///
+    ///     if LampShowcase.isOn { reply = await LampShowcase.hear { transcript = $0 } ?? ""; return }
+    ///     if LampShowcase.isOn { await LampShowcase.speak(utterance); return }
+    ///     if LampShowcase.isOn, let photo = LampShowcase.file("bottle.jpg") { … }      // beside showcase.json
+    enum LampShowcase {
+        static let folder: URL? = ProcessInfo.processInfo.environment["LAMP_SHOWCASE"]
+            .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+        static var isOn: Bool { folder != nil }
+        nonisolated(unsafe) static let script: [String: Any] = folder
+            .flatMap { try? Data(contentsOf: $0.appendingPathComponent("showcase.json")) }
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        /// How long each word of a spoken line takes to be heard.
+        static let wordTime = 0.34
+
+        private static let lock = NSLock()
+        nonisolated(unsafe) private static var taken: [String: Int] = [:]
+        nonisolated(unsafe) private static var answered: Set<Int> = []
+
+        /// Logs something that happened, with the time, for the reel.
+        static func note(_ event: String, _ fields: String...) {
+            guard let folder else { return }
+            let clean = fields.map { $0.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ") }
+            let line = ([String(format: "%.3f", Date().timeIntervalSince1970), event] + clean).joined(separator: "\t") + "\n"
+            lock.lock(); defer { lock.unlock() }
+            let url = folder.appendingPathComponent("events.tsv")
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile(); handle.write(Data(line.utf8)); try? handle.close()
+            } else {
+                try? Data(line.utf8).write(to: url)
+            }
+        }
+
+        /// A file the script brought beside showcase.json (a photo for the camera, a recording for the microphone).
+        static func file(_ name: String) -> URL? {
+            guard let url = folder?.appendingPathComponent(name), FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return url
+        }
+
+        /// The next of the script's `lines[name]`, in order, the last one again once they run out: what the person
+        /// says or types at that point. Each is a string, or `{"text": …, "caption": …}` with the words in English.
+        static func line(_ name: String = "spoken") -> (text: String, caption: String)? {
+            guard let list = (script["lines"] as? [String: Any])?[name] as? [Any], !list.isEmpty else { return nil }
+            let entry = list[min(take(name), list.count - 1)]
+            if let text = entry as? String { return (text, "") }
+            guard let entry = entry as? [String: Any], let text = entry["text"] as? String else { return nil }
+            return (text, entry["caption"] as? String ?? "")
+        }
+
+        private static func take(_ key: String) -> Int {
+            lock.lock(); defer { lock.unlock() }
+            let next = taken[key, default: 0]
+            taken[key] = next + 1
+            return next
+        }
+
+        /// The person saying the next of `lines[name]`: `partial` gets the words as they'd be recognized, one at a time,
+        /// and the whole line is answered once it's said. Nil when the script has none.
+        @MainActor static func hear(_ name: String = "spoken", partial: (String) -> Void = { _ in }) async -> String? {
+            guard let line = line(name) else { return nil }
+            note("hear", line.text, line.caption)
+            try? await Task.sleep(for: .seconds(0.5))
+            var words: [Substring] = []
+            for word in line.text.split(separator: " ") {
+                words.append(word)
+                partial(words.joined(separator: " "))
+                try? await Task.sleep(for: .seconds(wordTime))
+            }
+            note("hear-end")
+            return line.text
+        }
+
+        /// What the script's `captions` says a line means, for the reel's subtitles.
+        static func caption(_ text: String) -> String { (script["captions"] as? [String: String])?[text] ?? "" }
+
+        /// Says `utterance` into a file beside the log instead of the speakers, then waits as long as it lasts, so the
+        /// app behaves as if it spoke and the reel hears it where it did.
+        @MainActor static func speak(_ utterance: AVSpeechUtterance) async {
+            guard let folder else { return }
+            final class Recording: @unchecked Sendable {
+                var file: AVAudioFile?
+                var frames: AVAudioFramePosition = 0
+                var rate = 22050.0
+                var finished = false
+            }
+            let url = folder.appendingPathComponent("voice-\(take("voice") + 1).caf")
+            let synthesizer = AVSpeechSynthesizer()
+            let recording = Recording()
+            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                synthesizer.write(utterance) { buffer in
+                    guard !recording.finished, let pcm = buffer as? AVAudioPCMBuffer else { return }
+                    if pcm.frameLength == 0 { recording.finished = true; done.resume(); return }
+                    if recording.file == nil {
+                        recording.rate = pcm.format.sampleRate
+                        recording.file = try? AVAudioFile(forWriting: url, settings: pcm.format.settings,
+                                                          commonFormat: pcm.format.commonFormat, interleaved: pcm.format.isInterleaved)
+                    }
+                    try? recording.file?.write(from: pcm)
+                    recording.frames += AVAudioFramePosition(pcm.frameLength)
+                }
+            }
+            note("say", url.lastPathComponent, utterance.speechString, caption(utterance.speechString))
+            try? await Task.sleep(for: .seconds(Double(recording.frames) / recording.rate))
+            note("say-end")
+        }
+
+        /// The script's answer to one of LampAI's calls: the first unused entry of `ai` for that route ("/ai" when it
+        /// names none) whose `match`, if it has one, is in the request. Its `text` is the answer, `json` an object sent
+        /// as the answer's text, or `reply` the whole reply. A call the script has no answer for fails as AI does
+        /// when it isn't connected.
+        static func answer(_ path: String, _ body: Data) async throws -> [String: Any] {
+            if path == "/ai/status" { return ["text": true, "decisions": true, "pictures": true] }
+            let request = String(decoding: body, as: UTF8.self)
+            let entries = script["ai"] as? [[String: Any]] ?? []
+            let index: Int? = {
+                lock.lock(); defer { lock.unlock() }
+                let found = entries.indices.first { i in
+                    !answered.contains(i) && (entries[i]["route"] as? String ?? "/ai") == path
+                        && (entries[i]["match"] as? String).map { request.contains($0) } ?? true
+                }
+                if let found { answered.insert(found) }
+                return found
+            }()
+            note("ai", path)
+            try? await Task.sleep(for: .seconds(script["aiSeconds"] as? Double ?? 2.2))
+            note("ai-end", path)
+            guard let index else { throw LampAI.Failure(message: "The AI isn't connected.") }
+            let entry = entries[index]
+            if let reply = entry["reply"] as? [String: Any] { return reply }
+            if let json = entry["json"], let data = try? JSONSerialization.data(withJSONObject: json) {
+                return ["text": String(decoding: data, as: UTF8.self)]
+            }
+            return ["text": entry["text"] as? String ?? ""]
+        }
+
+        /// Where the script says the person is.
+        static var place: LampLocation.Place? {
+            guard let place = script["location"] as? [String: Any], let latitude = place["latitude"] as? Double,
+                  let longitude = place["longitude"] as? Double else { return nil }
+            return LampLocation.Place(latitude: latitude, longitude: longitude, accuracy: 20, date: Date(), name: place["name"] as? String)
+        }
+    }
+    // end LampShowcase
+
     enum LampStore {
         static let folder: URL = {
+            // A reel's take keeps its own, starting empty, so it shows nothing of the person's.
+            if let showcase = LampShowcase.folder {
+                let url = showcase.appendingPathComponent("data")
+                try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                return url
+            }
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             #if os(macOS)
             // On a Mac the data is kept under the app's plain id, whatever the app is signed as: an app made for
@@ -5080,6 +5295,136 @@
     }
     // end LampScreen
 
+    extension LampShowcase {
+        /// Runs once, at launch: the script's steps are played once the window is up.
+        static let start: Void = {
+            guard isOn else { return }
+            Task { @MainActor in await LampDriver.playShowcase() }
+        }()
+    }
+
+    extension LampDriver {
+        /// Plays showcase.json's `steps` on the app's own window, the way `use_app` would, logging where each thing
+        /// it acts on is (fractions of the window: x,y,width,height) so the reel's cursor goes there. A step is one of
+        /// use_app's actions (`{"action": "click", "target": "Take my seat"}`, which waits for its target to be there
+        /// and not dimmed), `{"wait": seconds}`, `{"wait_for": "Speak Italian"}`, `{"focus": "Send my reply"}` (or a
+        /// list of names, "window", or `[x, y, width, height]` in fractions of the window: where the reel's camera goes) or `{"mark": "words"}`. The script's `window`
+        /// (`{"width": 960, "height": 720}`) sizes the window first; it's brought to the front unless `front` is false,
+        /// since a window in the back is drawn with gray controls.
+        static func playShowcase() async {
+            var window: NSWindow?
+            for _ in 0..<150 {
+                window = LampRuntime.windowsOnScreen.first
+                if window != nil { break }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard let window else { LampShowcase.note("missing", "window"); return }
+            if let size = LampShowcase.script["window"] as? [String: Double], let width = size["width"], let height = size["height"] {
+                window.setContentSize(NSSize(width: width, height: height))
+                window.center()
+            }
+            if LampShowcase.script["front"] as? Bool ?? true {
+                NSApp.activate()
+                window.makeKeyAndOrderFront(nil)
+            }
+            try? await Task.sleep(for: .seconds(1))
+            LampShowcase.note("ready", "\(Int(window.frame.width))x\(Int(window.frame.height))")
+            // The steps start once the recording has its first frame (the recorder leaves a `recording` file then),
+            // so nothing happens before the reel can see it. With none after two minutes (no recorder, or macOS still
+            // asking about it), nothing is played: a take without its opening is no reel.
+            let recording = LampShowcase.folder?.appendingPathComponent("recording").path ?? ""
+            for _ in 0..<1200 where !FileManager.default.fileExists(atPath: recording) {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard FileManager.default.fileExists(atPath: recording) else {
+                LampShowcase.note("missing", "the recording's first frame")
+                LampShowcase.note("end")
+                return
+            }
+            try? await Task.sleep(for: .seconds(LampShowcase.script["lead"] as? Double ?? 0.8))
+            let steps = LampShowcase.script["steps"] as? [[String: Any]] ?? []
+            // A key held down (a game's controls) belongs to a batch, which lets it go.
+            _ = Handover.begin(id: "showcase", count: steps.count) { _ in }
+            for step in steps { await playShowcase(step) }
+            LampShowcase.note("end")
+        }
+
+        private static func playShowcase(_ step: [String: Any]) async {
+            let timeout = step["timeout"] as? Double ?? 30
+            if let seconds = step["wait"] as? Double { try? await Task.sleep(for: .seconds(seconds)); return }
+            if let target = step["wait_for"] as? String { _ = await showcaseFrame(of: target, timeout: timeout); return }
+            if let mark = step["mark"] as? String { LampShowcase.note("mark", mark); return }
+            if let rect = step["focus"] as? [Double], rect.count == 4 {
+                LampShowcase.note("focus", rect.map { String($0) }.joined(separator: ","), "region"); return
+            }
+            if let focus = step["focus"] {
+                let names = (focus as? [String]) ?? [focus as? String ?? "window"]
+                if names == ["window"] { LampShowcase.note("focus", "0,0,1,1", "window"); return }
+                var union: CGRect?
+                for name in names {
+                    guard let frame = await showcaseFrame(of: name, timeout: timeout, dimmed: true) else { continue }
+                    union = union.map { $0.union(frame) } ?? frame
+                }
+                if let union { LampShowcase.note("focus", showcaseText(union), names.joined(separator: ", ")) }
+                return
+            }
+            guard let data = try? JSONSerialization.data(withJSONObject: step),
+                  let action = try? JSONDecoder().decode(Action.self, from: data) else {
+                LampShowcase.note("missing", "a step it can't read"); return
+            }
+            if let target = action.target {
+                guard let frame = await showcaseFrame(of: target, timeout: timeout) else { return }
+                LampShowcase.note("act", showcaseText(frame), action.action, target)
+                // The reel's cursor gets there before anything happens.
+                try? await Task.sleep(for: .seconds(0.3))
+            }
+            // Taken from a run-loop timer (`after`), as `perform` takes its steps: an action that opens a dialog doesn't
+            // return until it closes, and the steps after it are how it gets answered. Those resume on the main queue,
+            // which keeps running while the dialog is open only because the action isn't itself on that queue.
+            after(0) { LampShowcase.note("did", run(action)) }
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+
+        /// Where `target` is in the front window, as fractions of it, once it's there (and not dimmed, unless that
+        /// doesn't matter: the camera can go to a button that isn't ready yet).
+        private static func showcaseFrame(of target: String, timeout: Double, dimmed: Bool = false) async -> CGRect? {
+            let end = Date().addingTimeInterval(timeout)
+            while Date() < end {
+                if let window = LampRuntime.windowsOnScreen.first, let frame = window.contentView?.superview {
+                    let items = elements(in: window).map(\.item)
+                    if case .one(let index) = LampScreen.find(target, in: items), dimmed || !items[index].disabled {
+                        let scale = LampRuntime.scale(of: window)
+                        let size = CGSize(width: frame.bounds.width * scale, height: frame.bounds.height * scale)
+                        let f = items[index].frame
+                        return CGRect(x: f.minX / size.width, y: f.minY / size.height, width: f.width / size.width, height: f.height / size.height)
+                    }
+                }
+                // A page's things are read in the page, which answers a moment later.
+                LampPageItems.refresh? {}
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+            LampShowcase.note("missing", target)
+            return nil
+        }
+
+        private static func showcaseText(_ r: CGRect) -> String {
+            String(format: "%.4f,%.4f,%.4f,%.4f", r.minX, r.minY, r.width, r.height)
+        }
+    }
+
+    /// A web page in the app (LampPage.swift's): the accessibility tree `LampDriver.elements` reads stops at a web view's
+    /// edge, so a page lists its own things (`LampPageReader`), in the window's picture's pixels. `refresh` reads them
+    /// again and then calls back; `items` are those last read in a window. Nothing in an app without a page.
+    @MainActor
+    enum LampPageItems {
+        static var refresh: ((@escaping @MainActor () -> Void) -> Void)?
+        static var items: (NSWindow) -> [LampScreen.Item] = { _ in [] }
+        /// Carries out an action aimed at a page (`point`, in the window's frame view, on it; or none, with the page
+        /// holding the keyboard) in the page's own script, which takes it whether or not the app is in front, where
+        /// WebKit lets an event made by the app go. What it did, or nil when the action isn't the page's.
+        static var act: ((LampDriver.Action, NSPoint?, NSWindow) -> String?)?
+    }
+
     /// Lets Lamp's builder use the app the way a person would: it clicks, types, presses keys and picks from
     /// menus in the front window, from inside the app, so no Accessibility permission is needed. An action names
     /// what it's for by `target`, an id or name from the screen as text (LampScreen, written beside each picture),
@@ -5161,6 +5506,20 @@
                 held.append((up, timer))
             }
 
+            /// A key held down on a page (LampPage.swift), pressed in the page's own script: `release` lets it go after
+            /// `seconds`, or at once if the batch stops or a newer one takes its place, as `hold`'s keys are.
+            func hold(for seconds: Double, release: @escaping @MainActor () -> Void) {
+                let timer = Timer(timeInterval: seconds, repeats: false) { timer in
+                    MainActor.assumeIsolated {
+                        guard let index = self.pageHeld.firstIndex(where: { $0.timer === timer }) else { return }
+                        self.pageHeld.remove(at: index).release()
+                    }
+                }
+                RunLoop.main.add(timer, forMode: .common)
+                pageHeld.append((release, timer))
+            }
+            private var pageHeld: [(release: @MainActor () -> Void, timer: Timer)] = []
+
             /// Ends the batch where it is: nothing more is done, keys held down are let go, and Lamp is told.
             func stop() {
                 guard carriesOn else { return }
@@ -5175,6 +5534,11 @@
                     NSApp.postEvent(key.up, atStart: true)
                 }
                 held = []
+                for key in pageHeld {
+                    key.timer.invalidate()
+                    key.release()
+                }
+                pageHeld = []
             }
 
             /// Lamp's Stop for batch `id`, signed with the app's token like the request, so no other process can stop it.
@@ -5205,7 +5569,7 @@
 
         /// Only Lamp knows this app's token, so only Lamp can sign a request (the "lampUseAppSignature" key marks
         /// builds that check it; notifications reach every process, so the token itself never travels). Builds
-        /// that take Lamp's Stop (`Handover`) have "lampUseAppStop" in them.
+        /// that take Lamp's Stop (`Handover`) have "lampUseAppStopSignature" in them (older ones "lampUseAppStop").
         static func perform(_ json: String?, id: String?, signature: String?) {
             guard let id, let json, let signature, let data = json.data(using: .utf8),
                   let actions = try? JSONDecoder().decode([Action].self, from: data) else { return }
@@ -5306,6 +5670,8 @@
                         last = (line, window, LampRuntime.picture(of: window))
                     }
                     report[line] = run(action)
+                    // A page reads its things again, for the next action's target: ready well within the pause.
+                    LampPageItems.refresh? {}
                     if action.action != "bar_icon" { keepBarPanel() }
                     tellWindow()
                     // A menu that was only read out, or an action that found nothing to do, isn't expected to change anything.
@@ -5425,7 +5791,7 @@
             // What the action names, found in the window's own accessibility tree: it's acted on where it has
             // an action of its own, and its middle is the point to click otherwise.
             var action = action
-            var named: (item: LampScreen.Item, id: String, element: AXUIElement)?
+            var named: (item: LampScreen.Item, id: String, element: AXUIElement?)?
             if let target = action.target?.trimmingCharacters(in: .whitespacesAndNewlines), !target.isEmpty, !(window is NSSavePanel) {
                 let elements = elements(in: window)
                 let items = elements.map(\.item)
@@ -5460,6 +5826,11 @@
                     return "\(action.action): " + filePanel(panel)
                 }
             }
+            // On a page (LampPage.swift's), the page carries the action out itself.
+            if let act = LampPageItems.act, !(window is NSSavePanel), ["click", "double_click", "type", "key"].contains(action.action),
+               let did = act(action, action.x != nil && action.y != nil ? point : nil, window) {
+                return (what.map { "\(action.action) \($0): " } ?? "\(action.action): ") + did
+            }
             if isBarPanel(window), action.action == "key", action.key?.lowercased() == "escape" {
                 releaseBarPanel()
                 return "pressed escape: closed the menu bar icon's panel"
@@ -5471,9 +5842,9 @@
                 // A thing that presses itself (a button, a switch, a link, a row's disclosure) is asked to, the
                 // way VoiceOver asks it, so the click can't miss. A picker's press would open its menu on the
                 // user's screen, and a row's or field's is a click: those go by the point.
-                if let named, action.action == "click", action.item == nil, pressable.contains(named.item.role) {
+                if let named, let element = named.element, action.action == "click", action.item == nil, pressable.contains(named.item.role) {
                     guard !named.item.disabled else { return label + "it's dimmed right now, so nothing happened" }
-                    if AXUIElementPerformAction(named.element, kAXPressAction as CFString) == .success { return label + "pressed" }
+                    if AXUIElementPerformAction(element, kAXPressAction as CFString) == .success { return label + "pressed" }
                 }
                 guard frame.bounds.contains(point) else { return label + "outside the window, whose picture is \(size) pixels" }
                 guard let view = frame.hitTest(point) else { return label + "nothing there" }
@@ -5489,9 +5860,9 @@
                 if let named, let what {
                     // A slider or stepper takes the number; a field takes the keyboard, with the text in place of
                     // what it held, so a value typed over "0.00" isn't "0.00120".
-                    if named.item.role == "slider" || named.item.role == "stepper" {
+                    if let element = named.element, named.item.role == "slider" || named.item.role == "stepper" {
                         guard let value = Double(text) else { return "type into \(what): give it a number" }
-                        guard AXUIElementSetAttributeValue(named.element, kAXValueAttribute as CFString, value as CFTypeRef) == .success else {
+                        guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef) == .success else {
                             return "type into \(what): it didn't take the number"
                         }
                         return "set \(what) to \(LampScreen.number(value))"
@@ -5526,8 +5897,8 @@
                 }
                 if let named, let what {
                     // Up and down step a slider or stepper; anything else goes to the thing once it has focus.
-                    if named.item.role == "slider" || named.item.role == "stepper", name == "up" || name == "down" {
-                        let stepped = AXUIElementPerformAction(named.element, (name == "up" ? kAXIncrementAction : kAXDecrementAction) as CFString) == .success
+                    if let element = named.element, named.item.role == "slider" || named.item.role == "stepper", name == "up" || name == "down" {
+                        let stepped = AXUIElementPerformAction(element, (name == "up" ? kAXIncrementAction : kAXDecrementAction) as CFString) == .success
                         return stepped ? "stepped \(what) \(name)" : "key \(name): \(what) didn't take the step"
                     }
                     if let view = frame.hitTest(point) { _ = click(view, at: point, in: window, count: 1) }
@@ -5583,13 +5954,13 @@
         /// accessibility API on this app's own process, which needs no permission: it's the one way to see
         /// SwiftUI's elements, whose bridge to AppKit stays asleep until an accessibility client asks, and
         /// it shows AppKit's and SwiftUI's alike. Frames are in the picture's pixels.
-        static func elements(in window: NSWindow) -> [(item: LampScreen.Item, element: AXUIElement)] {
+        static func elements(in window: NSWindow) -> [(item: LampScreen.Item, element: AXUIElement?)] {
             guard let frame = window.contentView?.superview, let root = axWindow(for: window) else { return [] }
             let scale = LampRuntime.scale(of: window)
             // The accessibility API counts from the top left of the main screen, pictures from the window's.
             let origin = CGPoint(x: window.frame.minX, y: (NSScreen.screens.first?.frame.maxY ?? 0) - window.frame.maxY)
             let bounds = CGRect(origin: origin, size: frame.bounds.size)
-            var found: [(item: LampScreen.Item, element: AXUIElement)] = []
+            var found: [(item: LampScreen.Item, element: AXUIElement?)] = []
             func string(_ value: CFTypeRef?) -> String {
                 switch value {
                 case let text as String: text
@@ -5670,7 +6041,8 @@
                 for child in read[10] as? [AXUIElement] ?? [] { visit(child, depth: depth + 1, under: under) }
             }
             visit(root, depth: 0, under: [])
-            return found
+            // A page's own things, read in the page (`LampPageItems`): clicked and typed into at their points.
+            return found + LampPageItems.items(window).map { ($0, nil) }
         }
 
         /// This window as the accessibility API has it: the one of this app's windows, or sheets on them, in
@@ -7043,6 +7415,8 @@
         /// Asks once (while in use, or always for watching in the background); true when allowed. A question
         /// the system won't ask again (refused, restricted, Always asked before) answers straight away.
         static func authorize(always: Bool = false) async -> Bool {
+            // A reel's take is where its script says, or nowhere; the Mac's own location is never asked for.
+            if LampShowcase.isOn { return LampShowcase.place != nil }
             let me = shared
             let status = me.manager.authorizationStatus
             if status == .denied || status == .restricted { return false }
@@ -7095,6 +7469,11 @@
 
         /// Where the person is now, named when the map knows the place.
         static func current() async throws -> Place {
+            if LampShowcase.isOn {
+                guard let place = LampShowcase.place else { throw Failure(message: "The showcase script names no location.") }
+                shared.current = place
+                return place
+            }
             guard await authorize() else { throw Failure(message: "The app isn't allowed to know where the person is. They can allow it in Settings.") }
             let location: CLLocation = try await withCheckedThrowingContinuation { continuation in
                 shared.once.append(continuation)
@@ -7129,6 +7508,8 @@
 
         /// Keeps `current` up as the person moves a few hundred meters or more, sparing the battery.
         func watch() {
+            // A reel's take stays where its script put it: nothing live may move it.
+            if LampShowcase.isOn { current = LampShowcase.place ?? current; return }
             wantsMoves = true
             Task {
                 guard await Self.authorize(), wantsMoves else { return }
@@ -7143,6 +7524,7 @@
         /// Keeps `visits`: where the person stops and for how long, even with the app closed. iPhone only;
         /// needs `always` and the location background mode.
         func watchVisits() {
+            if LampShowcase.isOn { return }
             #if os(iOS)
             wantsVisits = true
             Task {
@@ -10121,10 +10503,15 @@
     /// Text calls take a few seconds; decisions well under a second; image calls 10–60 seconds. Show a ProgressView, and show
     /// `error.localizedDescription` on failure. Aspect ratios look like "1:1", "16:9", "3:4".
     ///
-    /// Not every Mac has every kind of AI set up. `await LampAI.isAvailable(.pictures)` (or `.text`, `.decisions`) says
+    /// Not every Mac has every kind of AI set up. `await LampAI.isAvailable(.pictures)` (or `.text`, `.decisions`, `.act`) says
     /// whether it can answer now: check it where a feature depends on it, and show the feature with a short note
     /// ("Pictures need AI set up in Lamp") rather than hiding it or failing at it. A call that fails for that reason has
-    /// `needsSetup` set on its `LampAI.Failure`, and Lamp offers the person a way to set it up.
+    /// `needsSetup` set on its `LampAI.Failure`, and Lamp offers the person a way to set it up. `LampAI.status(_:)` says
+    /// more: what answers, whether on this Mac or at a service, and why not; `LampAI.openSetup(for:)` is the button for it.
+    ///
+    /// To have the app do what the person asks in their own words, give `LampAI.act` (or a `LampActSession`) the app's
+    /// own reads and checked writes: the AI chooses among them, the app checks and runs each, and the result says what
+    /// was done from the tools' receipts.
     enum LampAI {
         struct Failure: LocalizedError {
             let message: String
@@ -10133,7 +10520,8 @@
             var errorDescription: String? { message }
         }
 
-        enum Capability: String { case text, decisions, pictures }
+        /// `act`: the app's own tools doing what the person asks (`LampAI.act`).
+        enum Capability: String { case text, decisions, pictures, act }
 
         /// Whether this kind of AI can answer now. False when Lamp can't be reached and the phone has no key.
         static func isAvailable(_ capability: Capability) async -> Bool {
@@ -10528,6 +10916,7 @@
         }
 
         private static func post(_ path: String, body: Data, timeout: TimeInterval = 240) async throws -> [String: Any] {
+            if LampShowcase.isOn { return try await LampShowcase.answer(path, body) }
             #if os(iOS) && !targetEnvironment(simulator)
             // Away from the Mac, the phone answers for itself when it has a key: when the Mac didn't answer
             // the last check, and when a call to it fails to connect meanwhile.
@@ -10598,6 +10987,601 @@
                   let jpeg = LampImage.lampJPEG(scaled, quality: 0.8)
             else { return nil }
             return ["media_type": "image/jpeg", "data": jpeg.base64EncodedString()]
+        }
+    }
+
+    // MARK: - Doing things for the person
+
+    /// How one kind of AI stands for this app now, as Lamp sees it (`LampAI.status`).
+    struct LampAIStatus {
+        /// Where the AI works out its answer, for telling the person where their words go. A Claude Code or Codex
+        /// sign-in runs on the Mac but sends what it's given to its company: that's `remote`.
+        enum Processing: String { case onDevice, remote, unknown }
+        /// What the person can do when it can't answer: set it up in Lamp, open Lamp, or update Lamp.
+        enum Setup: String { case setUpInLamp = "lamp", openLamp, updateLamp }
+
+        var available: Bool
+        /// What answers, as the person would say it ("Claude Sonnet via Claude Code"); nil when nothing does.
+        var route: String?
+        var processing: Processing
+        /// Why it can't answer, or why it isn't the best it could be, in a sentence to show as it is.
+        var reason: String?
+        var setup: Setup?
+    }
+
+    extension LampAI {
+        /// Whether a kind of AI answers this app now, what answers it, where, and if not, why and what would help. A
+        /// status that says available isn't a promise: a call can still fail (signed out, offline), so keep the
+        /// person's request and show the failure with a way to try again.
+        static func status(_ capability: Capability) async -> LampAIStatus {
+            let reply: [String: Any]
+            do { reply = try await post("/ai/status", [:], timeout: 10) } catch {
+                return LampAIStatus(available: false, route: nil, processing: .unknown,
+                                    reason: "Lamp isn't open, or can't be reached from here.", setup: .openLamp)
+            }
+            guard let details = (reply["details"] as? [String: Any])?[capability.rawValue] as? [String: Any] else {
+                // A Lamp from before `details` answers with booleans alone, and knows nothing of actions.
+                if capability == .act {
+                    return LampAIStatus(available: false, route: nil, processing: .unknown, reason: "This needs a newer Lamp.", setup: .updateLamp)
+                }
+                let on = reply[capability.rawValue] as? Bool ?? false
+                return LampAIStatus(available: on, route: nil, processing: .unknown,
+                                    reason: on ? nil : "AI isn't set up in Lamp yet.", setup: on ? nil : .setUpInLamp)
+            }
+            let available = details["available"] as? Bool ?? false
+            return LampAIStatus(available: available, route: details["route"] as? String,
+                                processing: LampAIStatus.Processing(rawValue: details["where"] as? String ?? "") ?? .unknown,
+                                reason: details["reason"] as? String,
+                                setup: (details["setup"] as? String).flatMap(LampAIStatus.Setup.init(rawValue:)) ?? (available ? nil : .setUpInLamp))
+        }
+
+        /// The person pressed the app's "Set up in Lamp": Lamp shows the ways to set it up in the app's chat, which
+        /// opens beside the window. Only ever from the person's press. Keep what they typed, check `status` again when
+        /// the app comes back to the front, and let them send it again themselves: never run it for them after setup.
+        @MainActor static func openSetup(for capability: Capability) {
+            Task { @MainActor in
+                _ = try? await post("/ai/setup", ["capability": capability.rawValue], timeout: 10)
+                #if os(macOS)
+                LampSidebar.openFromMenu()
+                #endif
+            }
+        }
+
+        /// The person asks the app to do something in their own words, and the app's own tools do it: a few reads and
+        /// checked writes over its data, chosen by the AI, run by the app. `LampActSession` has the details; this starts a
+        /// request in `session`, or in a session of its own when there's none to keep (no questions back can be answered then).
+        @MainActor static func act(request: String, about: String = "", context: (any Encodable)? = nil, tools: [LampActTool],
+                                   session: LampActSession? = nil, onStep: ((LampActStep) -> Void)? = nil) -> LampActTurn {
+            (session ?? LampActSession(about: about, tools: tools)).ask(request, context: context, onStep: onStep)
+        }
+
+        fileprivate static var actPresent: String { present }
+    }
+
+    /// The shape of one argument of a tool, as Lamp checks it before the app sees the call.
+    struct LampActArg {
+        fileprivate let json: [String: Any]
+
+        private static func make(_ type: String, _ about: String, optional: Bool, _ more: [String: Any] = [:]) -> LampActArg {
+            var json = more
+            json["type"] = type
+            if !about.isEmpty { json["about"] = about }
+            if optional { json["optional"] = true }
+            return LampActArg(json: json)
+        }
+        /// Text; with `oneOf`, one of those exactly (ids, kinds of operation).
+        static func text(_ about: String = "", oneOf: [String] = [], optional: Bool = false) -> LampActArg {
+            make("string", about, optional: optional, oneOf.isEmpty ? [:] : ["oneOf": oneOf])
+        }
+        static func whole(_ about: String = "", min: Int? = nil, max: Int? = nil, optional: Bool = false) -> LampActArg {
+            var more: [String: Any] = [:]
+            if let min { more["min"] = min }
+            if let max { more["max"] = max }
+            return make("integer", about, optional: optional, more)
+        }
+        static func number(_ about: String = "", min: Double? = nil, max: Double? = nil, optional: Bool = false) -> LampActArg {
+            var more: [String: Any] = [:]
+            if let min { more["min"] = min }
+            if let max { more["max"] = max }
+            return make("number", about, optional: optional, more)
+        }
+        static func yesNo(_ about: String = "", optional: Bool = false) -> LampActArg { make("boolean", about, optional: optional) }
+        /// A day, YYYY-MM-DD.
+        static func day(_ about: String = "", optional: Bool = false) -> LampActArg { make("date", about, optional: optional) }
+        /// A date and time, ISO 8601 with its offset.
+        static func moment(_ about: String = "", optional: Bool = false) -> LampActArg { make("datetime", about, optional: optional) }
+        static func list(of item: LampActArg, _ about: String = "", min: Int? = nil, max: Int? = nil, optional: Bool = false) -> LampActArg {
+            var more: [String: Any] = ["of": item.json]
+            if let min { more["min"] = min }
+            if let max { more["max"] = max }
+            return make("list", about, optional: optional, more)
+        }
+
+        fileprivate var optional: Bool { json["optional"] as? Bool == true }
+    }
+
+    /// For a tool that takes no arguments.
+    struct LampActNoArgs: Decodable {}
+
+    /// What a tool's code is told about the call it runs.
+    struct LampActCall {
+        /// The same for the same change asked again in this request, through every question back and answer: make the
+        /// ids of what a write adds from it, so a change delivered twice finds what it added the first time.
+        let key: String
+        /// The AI's id for this call.
+        let id: String
+        /// The person's request, kept through its questions back.
+        let request: String
+        /// When the turn's time runs out. A write that waits (a network call) checks `Task.isCancelled` after it.
+        let deadline: Date
+    }
+
+    /// What a write did, in the app's own words. It's what the person is shown and what the AI is told; never write
+    /// more than the code knows ("Sent" when a device took a command, not "The lights are on").
+    struct LampActReceipt {
+        var summary: String
+        /// Anything else the AI should see, such as the id of what was added. JSON-friendly values only.
+        var details: [String: Any] = [:]
+
+        init(_ summary: String, details: [String: Any] = [:]) {
+            self.summary = summary
+            self.details = details
+        }
+    }
+
+    /// One of the app's tools: a read (looks something up) or a write (changes something), each a few lines over the
+    /// app's own data and commands. A write has a `check` of its own, run right before it, that looks its items up
+    /// again by id and says why it can't be done now; it runs only when the check says nothing.
+    struct LampActTool {
+        let name: String
+        let about: String
+        let reads: Bool
+        let args: [String: LampActArg]
+        fileprivate let check: (@MainActor ([String: Any], LampActCall) async throws -> String?)?
+        fileprivate let perform: @MainActor ([String: Any], LampActCall) async throws -> Any
+
+        fileprivate static func decode<Args: Decodable>(_ args: [String: Any], as type: Args.Type) throws -> Args {
+            guard let data = try? JSONSerialization.data(withJSONObject: args) else { throw LampAI.Failure(message: "Its arguments couldn't be read.") }
+            do { return try JSONDecoder().decode(Args.self, from: data) } catch {
+                throw LampAI.Failure(message: "Its arguments don't fit: \(error.localizedDescription)")
+            }
+        }
+
+        /// A look-up with nothing to say. `run` returns what the AI should see: ids and names, as little as answers it.
+        static func read<Value: Encodable>(_ name: String, _ about: String,
+                                           run: @escaping @MainActor () async throws -> Value) -> LampActTool {
+            read(name, about, args: [:], as: LampActNoArgs.self) { _, _ in try await run() }
+        }
+
+        /// A look-up with arguments, decoded as `type`.
+        static func read<Args: Decodable, Value: Encodable>(_ name: String, _ about: String, args: [String: LampActArg],
+                                                            as type: Args.Type,
+                                                            run: @escaping @MainActor (Args, LampActCall) async throws -> Value) -> LampActTool {
+            LampActTool(name: name, about: about, reads: true, args: args, check: nil) { raw, call in
+                let value = try await run(try decode(raw, as: Args.self), call)
+                let data = try JSONEncoder().encode(value)
+                return try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
+            }
+        }
+
+        /// A change. `check` says in a sentence why it can't be done now (the item is gone, the device can't, the value
+        /// is out of range), or nil; `run` does it the way the app's own button does and says what it did.
+        static func write<Args: Decodable>(_ name: String, _ about: String, args: [String: LampActArg],
+                                           as type: Args.Type,
+                                           check: @escaping @MainActor (Args, LampActCall) async -> String?,
+                                           run: @escaping @MainActor (Args, LampActCall) async throws -> LampActReceipt) -> LampActTool {
+            LampActTool(name: name, about: about, reads: false, args: args,
+                        check: { raw, call in await check(try decode(raw, as: Args.self), call) },
+                        perform: { raw, call in try await run(try decode(raw, as: Args.self), call) })
+        }
+
+        fileprivate var declared: [String: Any] {
+            ["name": name, "about": about, "reads": reads, "args": args.mapValues(\.json)]
+        }
+
+        /// The app's own check of a call's shape, beside Lamp's: arguments it declared, none it needs missing.
+        fileprivate func problem(_ given: [String: Any]) -> String? {
+            if let extra = given.keys.sorted().first(where: { args[$0] == nil }) { return "\(name) has no argument \(extra)." }
+            if let missing = args.keys.sorted().first(where: { !args[$0]!.optional && (given[$0] == nil || given[$0] is NSNull) }) {
+                return "\(name) needs \(missing)."
+            }
+            return nil
+        }
+    }
+
+    /// A change the app made, with what its tool said.
+    struct LampActDone {
+        let tool: String
+        let key: String
+        let receipt: LampActReceipt
+    }
+
+    /// A change the app didn't make, and why.
+    struct LampActMiss {
+        let tool: String
+        let reason: String
+        /// It had started when it failed, so some of it may have gone through: it isn't "nothing changed".
+        var partly = false
+    }
+
+    /// What a turn is doing, for showing it as it goes. Called on the main thread.
+    enum LampActStep {
+        case thinking
+        case reading(String)
+        case changing(String)
+        case changed(LampActDone)
+        case failed(LampActMiss)
+    }
+
+    /// How a turn ended.
+    struct LampActResult {
+        enum Stop: String {
+            /// The person (or the app) cancelled, or started something else.
+            case cancelled
+            /// The turn's time ran out.
+            case time
+            /// The AI used all its steps without replying.
+            case steps
+            /// The request asked for more than a request may: changes, questions back, or what a session keeps.
+            case limit
+            /// The AI couldn't answer (signed out, offline, a service down): `error` says how.
+            case error
+            /// Lamp couldn't be reached.
+            case unreachable
+        }
+
+        /// The AI's last words. Show them only for a question, or when nothing was changed; say what was done from `done`.
+        var reply = ""
+        /// The AI's question back, when it needs to know which one, who or when: answer it with `session.answer`.
+        var question: String?
+        /// Two to four short answers to offer as buttons for the question, or none.
+        var choices: [String] = []
+        /// What this turn changed, from the tools' own receipts.
+        var done: [LampActDone] = []
+        var failed: [LampActMiss] = []
+        var skipped: [LampActMiss] = []
+        var stopped: Stop?
+        var error: String?
+
+        /// What to tell the person, from what the app did: the receipts, what failed or was skipped, and why it
+        /// stopped. The AI's reply is added only for a question or when nothing changed.
+        var summary: String {
+            var lines = done.map(\.receipt.summary)
+            lines += failed.map { $0.partly ? "May have partly done \($0.tool): \($0.reason)" : "Didn't \($0.tool): \($0.reason)" }
+            lines += skipped.map { "Skipped \($0.tool): \($0.reason)" }
+            switch stopped {
+            case .cancelled?:
+                let started = !done.isEmpty || failed.contains(where: \.partly)
+                lines.append(started ? "Stopped. Nothing after this was done." : "Stopped before changing anything.")
+            case .time?: lines.append("Ran out of time.")
+            case .steps?: lines.append("Couldn't finish in the steps one request may take.")
+            case .limit?: lines.append(error ?? "That's more than one request can do.")
+            case .error?, .unreachable?: lines.append(error ?? "The AI couldn't answer.")
+            case nil: break
+            }
+            // The AI's words only for its question, or beside "Nothing was changed" when nothing was even tried: what it
+            // says it did is never shown as done.
+            if let question { lines.append(question) }
+            else if lines.isEmpty { lines.append(reply.isEmpty ? "Nothing was changed." : "Nothing was changed. \(reply)") }
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    /// One request being worked on: its result when it's over, and a way to stop it.
+    @MainActor final class LampActTurn {
+        fileprivate var task: Task<LampActResult, Never>?
+        fileprivate weak var session: LampActSession?
+        fileprivate let generation: Int
+
+        fileprivate init(session: LampActSession, generation: Int) {
+            self.session = session
+            self.generation = generation
+        }
+
+        var result: LampActResult {
+            get async { await task?.value ?? LampActResult(stopped: .cancelled) }
+        }
+
+        /// Stops it: nothing more is asked or changed, and a change already under way is kept in the receipts, since it
+        /// can't be taken back. Late answers from the AI run nothing.
+        func cancel() {
+            session?.cancel(generation)
+            task?.cancel()
+        }
+    }
+
+    /// The app's conversation with the AI about doing things: one request at a time, each with any questions back and
+    /// their answers, and every change made, by the app's own tools.
+    ///
+    ///     let session = LampActSession(about: "A grocery list.", tools: [
+    ///         .read("items", "The list's items: id and name.") { list.items.map { ["id": $0.id, "name": $0.name] } },
+    ///         .write("add", "Adds an item.", args: ["name": .text("What to add")], as: Add.self,
+    ///                check: { add, _ in add.name.isEmpty ? "Say what to add." : nil },
+    ///                run: { add, call in list.add(add.name, id: call.key); return LampActReceipt("Added \(add.name)") }),
+    ///     ])
+    ///     let turn = session.ask("add milk and eggs")
+    ///     let result = await turn.result
+    ///     if let question = result.question { show(question, result.choices) } else { show(result.summary) }
+    ///     // later, the person's answer: session.answer("Whole milk")
+    ///
+    /// The AI proposes calls; Lamp checks their shapes; the app's `check` decides whether each change is allowed now and
+    /// its `run` makes it. Reads run first, then changes one at a time, each checked right before it runs; a change that
+    /// fails skips the rest of that step. The same change asked twice in a request runs once. A request may take 4 AI
+    /// steps between questions, 6 changes in all, 3 questions back, and the route's time (25 seconds over OpenRouter, a
+    /// minute through Claude Code, Codex or a model on the Mac); asking something new, cancelling or closing ends it.
+    @MainActor final class LampActSession {
+        static let maxSteps = 4
+        static let maxWrites = 6
+        static let maxQuestions = 3
+        /// What a session keeps of its changes; past this it stops taking changes and says so, rather than forget them.
+        static let maxReceipts = 60
+        static let maxSeconds: Double = 60
+
+        let about: String
+        let tools: [LampActTool]
+        /// Every change this session made, in order.
+        private(set) var receipts: [LampActDone] = []
+        /// The question waiting for the person's answer.
+        private(set) var question: String?
+        private(set) var choices: [String] = []
+
+        private struct Operation {
+            let id = UUID().uuidString
+            let request: String
+            var answers: [(question: String, answer: String)] = []
+            var writes = 0
+        }
+        private var operation: Operation?
+        /// Each change's result by its key, so the same change asked again gets it without running again.
+        private var ran: [String: Any] = [:]
+        private var generation = 0
+        private var cancelled: Set<Int> = []
+        private var closed = false
+        private weak var running: LampActTurn?
+        private let send: ([String: Any], TimeInterval) async throws -> [String: Any]
+
+        /// `send` stands in for Lamp in a test; leave it out.
+        init(about: String = "", tools: [LampActTool], send: (([String: Any], TimeInterval) async throws -> [String: Any])? = nil) {
+            self.about = about
+            self.tools = tools
+            self.send = send ?? { body, timeout in try await LampAI.post("/ai/act", body, timeout: timeout) }
+        }
+
+        /// A new request: whatever was under way or waiting for an answer ends.
+        func ask(_ request: String, context: (any Encodable)? = nil, onStep: ((LampActStep) -> Void)? = nil) -> LampActTurn {
+            question = nil
+            choices = []
+            operation = Operation(request: request)
+            return start(context: context, onStep: onStep)
+        }
+
+        /// The person's answer to the question waiting. Only the first answer counts: nil when nothing is waiting.
+        func answer(_ text: String, context: (any Encodable)? = nil, onStep: ((LampActStep) -> Void)? = nil) -> LampActTurn? {
+            guard let asked = question, var op = operation, !closed else { return nil }
+            question = nil
+            choices = []
+            op.answers.append((asked, text))
+            operation = op
+            return start(context: context, onStep: onStep)
+        }
+
+        /// Stops whatever is under way and drops the question waiting.
+        func cancel() { cancel(generation) }
+
+        /// For good: nothing more runs, and anything that comes back is dropped.
+        func close() {
+            closed = true
+            cancel()
+            operation = nil
+        }
+
+        fileprivate func cancel(_ turn: Int) {
+            cancelled.insert(turn)
+            if turn == generation {
+                question = nil
+                choices = []
+                // A request to Lamp still waiting is given up, so the turn ends now rather than when the AI answers.
+                running?.task?.cancel()
+            }
+        }
+
+        private func start(context: (any Encodable)?, onStep: ((LampActStep) -> Void)?) -> LampActTurn {
+            running?.task?.cancel()
+            generation += 1
+            let turn = LampActTurn(session: self, generation: generation)
+            var json: Any?
+            if let context, let data = try? JSONEncoder().encode(context) { json = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) }
+            let mine = generation
+            // The turn keeps its session while it runs, so `LampAI.act` without a session of the app's own still finishes.
+            turn.task = Task { @MainActor in await self.run(mine, context: json, onStep: onStep ?? { _ in }) }
+            running = turn
+            return turn
+        }
+
+        private func run(_ turn: Int, context: Any?, onStep: (LampActStep) -> Void) async -> LampActResult {
+            var out = LampActResult()
+            guard !closed, var op = operation else { out.stopped = .cancelled; return out }
+            if op.answers.count > Self.maxQuestions {
+                out.stopped = .limit
+                out.error = "That took more questions than one request can. Start again, saying which ones."
+                return out
+            }
+            let started = Date()
+            var deadline = started.addingTimeInterval(Self.maxSeconds)
+            func over() -> LampActResult.Stop? {
+                if closed || cancelled.contains(turn) || turn != generation || Task.isCancelled { return .cancelled }
+                if Date() >= deadline { return .time }
+                return nil
+            }
+            var request = op.request
+            for (asked, answer) in op.answers { request += "\n\nYou asked: \(asked)\nThe person answered: \(answer)" }
+            let earlier = receipts.filter { $0.key.hasPrefix(Self.prefix(op)) }.map(\.receipt.summary)
+            if !earlier.isEmpty { request += "\n\nAlready done for this request (don't do these again): " + earlier.joined(separator: "; ") }
+            var steps: [[String: Any]] = []
+            var route: String?
+            while true {
+                if let stop = over() { out.stopped = stop; break }
+                let left = deadline.timeIntervalSinceNow
+                if left <= 0.5 { out.stopped = .time; break }
+                var body: [String: Any] = ["request": request, "about": about, "now": LampAI.actPresent,
+                                           "tools": tools.map(\.declared), "steps": steps, "seconds": Int(left)]
+                if let context { body["context"] = context }
+                if let route { body["route"] = route }
+                if steps.count >= Self.maxSteps - 1 { body["final"] = true }
+                onStep(.thinking)
+                let answer: [String: Any]
+                do { answer = try await send(body, left) } catch {
+                    if let stop = over() { out.stopped = stop; break }
+                    let message = (error as? LampAI.Failure)?.message ?? error.localizedDescription
+                    out.stopped = message.contains("reach Lamp") ? .unreachable : .error
+                    out.error = message
+                    break
+                }
+                // The route's own time for a turn, counted from its start, shortens it; it never lengthens it.
+                if let seconds = (answer["seconds"] as? NSNumber)?.doubleValue, seconds > 0 {
+                    deadline = min(deadline, started.addingTimeInterval(seconds))
+                }
+                // Cancelled, out of time or replaced: an answer that comes late runs nothing.
+                if let stop = over() { out.stopped = stop; break }
+                route = answer["route"] as? String ?? route
+                if let calls = answer["calls"] as? [[String: Any]], !calls.isEmpty {
+                    let ids = calls.compactMap { $0["id"] as? String }
+                    guard ids.count == calls.count, Set(ids).count == ids.count else {
+                        out.stopped = .error
+                        out.error = "The AI gave two calls the same id."
+                        break
+                    }
+                    let results = await runCalls(calls, op: &op, out: &out, deadline: deadline, over: over, onStep: onStep)
+                    operation = turn == generation ? op : operation
+                    steps.append(["calls": calls, "results": calls.map { call -> [String: Any] in
+                        let id = call["id"] as! String
+                        return results[id] ?? ["id": id, "ok": false, "skipped": "Not run."]
+                    }])
+                    if out.stopped != nil { break }
+                    if steps.count >= Self.maxSteps { out.stopped = .steps; break }
+                    continue
+                }
+                out.reply = answer["reply"] as? String ?? ""
+                if answer["ask"] as? Bool == true, op.answers.count >= Self.maxQuestions {
+                    out.reply = ""
+                    out.stopped = .limit
+                    out.error = "That took more questions than one request can. Start again, saying which ones."
+                } else if answer["ask"] as? Bool == true {
+                    out.question = out.reply
+                    let offered = answer["choices"] as? [Any] ?? []
+                    let fit = offered.count >= 2 && offered.count <= 4 && offered.allSatisfy { item in
+                        guard let text = item as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty, text.count <= 24 else { return false }
+                        return text.rangeOfCharacter(from: CharacterSet(charactersIn: "<>*_`#[]{}|\\\n\r\t")) == nil
+                    }
+                    out.choices = fit ? offered.map { ($0 as! String).trimmingCharacters(in: .whitespaces) } : []
+                    question = out.question
+                    choices = out.choices
+                }
+                break
+            }
+            if turn == generation { operation = op }
+            return out
+        }
+
+        private static func prefix(_ op: Operation) -> String { "k" + String(op.id.prefix(8)).lowercased() }
+
+        /// Reads first, one after another; then the changes, each checked right before it runs. A change that fails
+        /// skips the ones after it in this step, which the AI is told.
+        private func runCalls(_ calls: [[String: Any]], op: inout Operation, out: inout LampActResult, deadline: Date,
+                              over: () -> LampActResult.Stop?, onStep: (LampActStep) -> Void) async -> [String: [String: Any]] {
+            var results: [String: [String: Any]] = [:]
+            func tool(_ call: [String: Any]) -> LampActTool? { tools.first { $0.name == call["name"] as? String } }
+            // A null is an argument left out: the same change either way, to the key and to the tool.
+            func args(_ call: [String: Any]) -> [String: Any] { (call["args"] as? [String: Any] ?? [:]).filter { !($0.value is NSNull) } }
+            func callInfo(_ call: [String: Any], key: String) -> LampActCall {
+                LampActCall(key: key, id: call["id"] as! String, request: op.request, deadline: deadline)
+            }
+            for call in calls where tool(call)?.reads != false {
+                let id = call["id"] as! String
+                if let stop = over() { out.stopped = stop; return results }
+                guard let tool = tool(call) else { results[id] = ["id": id, "ok": false, "error": "There's no tool called \(call["name"] as? String ?? "")."]; continue }
+                if let bad = tool.problem(args(call)) { results[id] = ["id": id, "ok": false, "error": bad]; continue }
+                onStep(.reading(tool.name))
+                do {
+                    let value = try await tool.perform(args(call), callInfo(call, key: ""))
+                    results[id] = ["id": id, "ok": true, "value": Self.cut(value)]
+                } catch {
+                    results[id] = ["id": id, "ok": false, "error": Self.words(error)]
+                }
+            }
+            var stopped: String?
+            for call in calls where tool(call)?.reads == false {
+                let id = call["id"] as! String, tool = tool(call)!, given = args(call)
+                func miss(_ reason: String, skipped: Bool = false, partly: Bool = false) {
+                    let entry = LampActMiss(tool: tool.name, reason: reason, partly: partly)
+                    if skipped { out.skipped.append(entry) } else { out.failed.append(entry); onStep(.failed(entry)) }
+                    results[id] = ["id": id, "ok": false, skipped ? "skipped" : "error": reason]
+                    if !skipped { stopped = stopped ?? "An earlier change in this step didn't go through." }
+                }
+                if let stop = over() { out.stopped = stop; return results }
+                if let stopped { miss(stopped, skipped: true); continue }
+                if let bad = tool.problem(given) { miss(bad); continue }
+                let key = Self.prefix(op) + Self.hash(tool.name + "|" + Self.canonical(given))
+                // The same change asked again in this request gets its first result, and doesn't run again: one that
+                // failed while it ran may have done part of it, so it isn't tried again by itself either.
+                if let kept = ran[key] {
+                    if let failed = kept as? [String: Any], let reason = failed["failedWhileRunning"] as? String {
+                        miss("Already tried in this request, and it didn't go through: \(reason)")
+                    } else {
+                        results[id] = ["id": id, "ok": true, "repeat": true, "value": kept]
+                    }
+                    continue
+                }
+                if op.writes >= Self.maxWrites { miss("Over this request's limit of \(Self.maxWrites) changes."); out.stopped = .limit; out.error = "That's more changes than one request can make. Ask for the rest separately."; return results }
+                if receipts.count >= Self.maxReceipts { miss("This conversation has made as many changes as it can keep track of."); out.stopped = .limit; out.error = "Close this and start again to make more changes."; return results }
+                let info = callInfo(call, key: key)
+                let problem: String?
+                do { problem = try await tool.check?(given, info) } catch { problem = Self.words(error) }
+                if let problem { miss(problem); continue }
+                // Cancel and the time are looked at again right before the change, never in the middle of it.
+                if let stop = over() { out.stopped = stop; return results }
+                onStep(.changing(tool.name))
+                op.writes += 1
+                do {
+                    let receipt = try await tool.perform(given, info) as! LampActReceipt
+                    // Done is done, even if the turn was cancelled while it ran: it's kept and shown.
+                    var value = receipt.details.filter { JSONSerialization.isValidJSONObject([$0.value]) }
+                    value["summary"] = receipt.summary
+                    ran[key] = value
+                    let done = LampActDone(tool: tool.name, key: key, receipt: receipt)
+                    out.done.append(done)
+                    receipts.append(done)
+                    results[id] = ["id": id, "ok": true, "value": value]
+                    onStep(.changed(done))
+                } catch {
+                    ran[key] = ["failedWhileRunning": Self.words(error)]
+                    miss(Self.words(error), partly: true)
+                }
+            }
+            return results
+        }
+
+        private static func words(_ error: Error) -> String { (error as? LampAI.Failure)?.message ?? error.localizedDescription }
+
+        /// At most 4 KB of a read goes back to the AI, cut with a note.
+        private static func cut(_ value: Any) -> Any {
+            guard JSONSerialization.isValidJSONObject([value]), let data = try? JSONSerialization.data(withJSONObject: [value]) else {
+                return ["note": "The result couldn't be read."]
+            }
+            guard data.count > 4096 else { return value }
+            return ["cut": String(String(decoding: data, as: UTF8.self).prefix(4000)), "note": "Cut short: ask for less."]
+        }
+
+        private static func canonical(_ value: Any) -> String {
+            guard let data = try? JSONSerialization.data(withJSONObject: [value], options: [.sortedKeys]) else { return "" }
+            return String(decoding: data, as: UTF8.self)
+        }
+
+        /// FNV-1a: short and stable, for keys.
+        private static func hash(_ text: String) -> String {
+            var h: UInt64 = 0xcbf29ce484222325
+            for byte in text.utf8 { h = (h ^ UInt64(byte)) &* 0x100000001b3 }
+            return String(h, radix: 16)
         }
     }
 
@@ -10780,9 +11764,9 @@
 
         /// What the wish's apps say to each other, numbered: an app that says another number was built by another Lamp.
         /// 2 brought values, 3 files and a game's controls, 4 copies of one app on several devices, 5 shared collections
-        /// (`LampStore.shared`), 6 the wish's own collections, shared by all its apps; an app from before says none, which
-        /// counts as 1.
-        private static let wire = 6
+        /// (`LampStore.shared`), 6 the wish's own collections, shared by all its apps, 7 Lamp keeping them too; an app from
+        /// before says none, which counts as 1.
+        private static let wire = 7
         /// The wish's other apps open now.
         var peers: [Peer] { apps.filter(\.isOpen) }
         var state: State { status.state }
@@ -10800,6 +11784,11 @@
         private var opener: Sealer?
         private var handshake: (nonce: Data, tag: Data)?
         private var relayIn = false
+        /// Lamp's room said Lamp keeps the wish's shared collections: Lamp is shared with as a copy is, under its own name
+        /// (`keeper`), so a copy that opens alone gets the latest and what it changes reaches the others when they open.
+        /// Never one of the wish's apps or copies.
+        private var lampKeeps = false
+        nonisolated private static let keeper = "lamp"
         private var lampAway = false
         private var alone = false
         /// Another copy of this app has been open somewhere (Lamp's room said so), kept on the device: until then an
@@ -10937,6 +11926,7 @@
             link.task = nil
             sealer = nil
             relayIn = false
+            lampKeeps = false
             relayPresent = [:]
             dropFiles("The link was stopped.") { _, _ in true }
             for direct in Array(directs.values) + Array(opening.values) { drop(direct) }
@@ -10993,6 +11983,15 @@
                 }
             }
             return true
+        }
+
+        /// A word for Lamp itself, through its room: what a page in this app has of a change Lamp put into it (lamp.js's
+        /// "A change while it's open"). Nothing when Lamp's room isn't reached; it goes nowhere else.
+        func toLamp(_ data: Any) {
+            guard relayIn, JSONSerialization.isValidJSONObject(["data": data]),
+                  let frame = try? JSONSerialization.data(withJSONObject: ["t": "send", "to": "lamp", "data": data]),
+                  frame.count <= Self.messageLimit else { return }
+            say(frame)
         }
 
         /// Hears what the wish's other apps send: who sent it (its peer name) and the JSON they sent.
@@ -11534,6 +12533,15 @@
                 return transfer
             }
             guard data.count <= LampFiles.largest else { return failed("The file is too big to send: 64 MB at most.") }
+            // A shared file's bytes to Lamp, which keeps them for the copies that open later: through its room alone.
+            if peer == Self.keeper, channel.hasPrefix("store:") {
+                guard relayIn, lampKeeps, outgoing.keys.filter({ $0.hasPrefix(peer + "\t") }).count < LampFiles.transfers,
+                      fileMessage(["t": "file", "id": id, "name": String(name.prefix(200)), "type": String(type.prefix(100)), "size": data.count, "ch": channel],
+                                  to: peer, via: nil) else { return failed("Lamp isn't reachable now.") }
+                outgoing[key] = Outgoing(peer: peer, via: nil, transfer: transfer, bytes: data)
+                pump(key)
+                return transfer
+            }
             guard let app = self.peer(peer) else { return failed("The wish has no app called \"\(given)\".") }
             guard app.isOpen, state == .connected else { return failed(app.status.reason.isEmpty ? "\(Self.title(app.name)) isn't open now." : app.status.reason) }
             guard app.copies.contains(where: { $0.id == peer }) else { return failed("That copy of \(app.name) isn't open now.") }
@@ -11565,7 +12573,7 @@
             }
             var message = message
             message["to"] = peer
-            guard relayIn, relayPresent[peer] != nil, let json = Self.json(message) else { return false }
+            guard relayIn, relayPresent[peer] != nil || (peer == Self.keeper && lampKeeps), let json = Self.json(message) else { return false }
             say(json)
             return true
         }
@@ -11859,6 +12867,7 @@
                 undeliveredSaid = []
                 lampAway = false
                 relayIn = true
+                lampKeeps = m["keeps"] as? Bool == true
                 reported = ""
                 if let name = m["peer"] as? String, Self.isName(name) { me = Self.app(of: name) }
                 setRoster(m["apps"] as? [[String: Any]] ?? [])
@@ -11866,6 +12875,8 @@
                 for seen in m["peers"] as? [[String: Any]] ?? [] { present(seen) }
                 tellWhereIListen()
                 rebuild()
+                // Lamp keeps what the copies share: each tells the other what it has, as two copies do when they meet.
+                if lampKeeps, !me.isEmpty { sendSums(to: Self.keeper); fetchFiles() }
             case "joined":
                 if let joined = m["peer"] as? [String: Any] { present(joined) }
                 rebuild()
@@ -11922,6 +12933,7 @@
             opener = nil
             handshake = nil
             relayIn = false
+            lampKeeps = false
             relayPresent = [:]
             dropFiles("The link was lost.") { _, way in way == nil }
             // Turned away, or the room ended, or dropped before it was let in: the relay may have moved, or this app may
@@ -12943,13 +13955,13 @@
         /// and the copies of the wish's other apps that speak 6, which share only the wish's own (`shares`).
         private var storePeers: [String] {
             guard !me.isEmpty else { return [] }
-            return copies(for: nil).filter { $0 != copy && wire(of: $0) >= (Self.app(of: $0) == me ? 5 : 6) }
+            return copies(for: nil).filter { $0 != copy && wire(of: $0) >= (Self.app(of: $0) == me ? 5 : 6) } + (relayIn && lampKeeps ? [Self.keeper] : [])
         }
 
         /// Whether a collection goes to another copy and is taken from it: this app's own collections only between its own
         /// copies, never another app's of the wish; the wish's own between every app of it.
         private func shares(_ name: String, with peer: String) -> Bool {
-            !me.isEmpty && peer != copy && (Self.app(of: peer) == me || Self.isWishWide(name))
+            !me.isEmpty && peer != copy && (Self.app(of: peer) == me || Self.isWishWide(name) || peer == Self.keeper)
         }
 
         private func heardStore(_ m: [String: Any], from peer: String) {
@@ -13039,8 +14051,12 @@
             keepValues()
             if !changed.isEmpty { itemsChanged(name, changed, from: peer) } else if !collectionsUnsaved.isEmpty { saveCollectionsSoon() }
             // Passed on as values are: to the copies open now that the one it came from may not reach.
+            // Lamp tells each copy in its room what it keeps, so what came from Lamp goes no further; what came straight from a
+            // copy Lamp's room doesn't have goes on to Lamp.
             for each in storePeers where each != peer && !taken.isEmpty && shares(name, with: each) {
-                if directs[each]?.ready == true || (relayPresent[peer] == nil && relayPresent[each] != nil) { shareItems(name, taken, to: each) }
+                if directs[each]?.ready == true || (peer != Self.keeper && relayPresent[peer] == nil && (relayPresent[each] != nil || each == Self.keeper)) {
+                    shareItems(name, taken, to: each)
+                }
             }
         }
 
@@ -13069,7 +14085,7 @@
             frame["t"] = "store"
             if let direct = directs[peer], direct.ready {
                 if let json = Self.json(frame) { sealed(json, on: direct) }
-            } else if relayPresent[peer] != nil {
+            } else if relayPresent[peer] != nil || (peer == Self.keeper && relayIn && lampKeeps) {
                 frame["to"] = peer
                 if let json = Self.json(frame) { say(json) }
             }
@@ -13738,7 +14754,7 @@
         }
 
         private func arm() {
-            guard running == nil else { return }
+            guard running == nil, !LampShowcase.isOn else { return }
             timer?.invalidate()
             let delay = max(0, due.timeIntervalSinceNow)
             timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in self?.fire() }
@@ -13823,7 +14839,7 @@
         }
 
         private func arm() {
-            guard running == nil else { return }
+            guard running == nil, !LampShowcase.isOn else { return }
             timer?.invalidate()
             let delay = max(0, due.timeIntervalSinceNow)
             timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
@@ -14644,6 +15660,11 @@
 
         static func send(_ title: String, body: String = "", sound: Bool = true, at date: Date? = nil, id: String? = nil,
                          actions: [String] = [], timeSensitive: Bool = false) {
+            // A reel shows what would arrive now; what's planned for later days isn't part of it.
+            if LampShowcase.isOn {
+                if (date ?? Date()).timeIntervalSinceNow < 60 { LampShowcase.note("notification", title, body) }
+                return
+            }
             let center = UNUserNotificationCenter.current()
             if center.delegate == nil { center.delegate = presenter }
             let id = id ?? UUID().uuidString
@@ -16463,97 +17484,43 @@
     #endif
 
 #if os(macOS)
-/// Lamp's flame, drawn like an SF Symbol: the app icon's outer flame as an outline, its inner flame filled.
+/// Lamp's mark: the system's shuffle symbol, the one Lamp shows for remixing.
 enum LampGlyph {
-    /// Width over height.
-    static let aspect: CGFloat = 516 / 725
+    static let symbol = "shuffle"
 
-    /// The two flames in a box one unit tall, y down, from the icon's own drawing. The inner one is smaller
-    /// than in the icon, about its foot, so the outline has room around it at a symbol's size.
-    static let paths: (outer: CGPath, inner: CGPath) = {
-        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: (x - 254) / 725, y: (y - 150) / 725) }
-        let outer = CGMutablePath()
-        outer.move(to: p(540, 150))
-        outer.addCurve(to: p(770, 600), control1: p(560, 290), control2: p(770, 380))
-        outer.addCurve(to: p(512, 875), control1: p(770, 755), control2: p(655, 875))
-        outer.addCurve(to: p(254, 600), control1: p(369, 875), control2: p(254, 755))
-        outer.addCurve(to: p(398, 325), control1: p(254, 465), control2: p(335, 395))
-        outer.addCurve(to: p(482, 472), control1: p(408, 405), control2: p(440, 450))
-        outer.addCurve(to: p(540, 150), control1: p(468, 350), control2: p(492, 250))
-        outer.closeSubpath()
-        let inner = CGMutablePath()
-        inner.move(to: p(524, 388))
-        inner.addCurve(to: p(662, 648), control1: p(560, 476), control2: p(662, 525))
-        inner.addCurve(to: p(512, 812), control1: p(662, 748), control2: p(597, 812))
-        inner.addCurve(to: p(362, 648), control1: p(427, 812), control2: p(362, 748))
-        inner.addCurve(to: p(452, 474), control1: p(362, 565), control2: p(418, 522))
-        inner.addCurve(to: p(500, 558), control1: p(462, 524), control2: p(480, 548))
-        inner.addCurve(to: p(524, 388), control1: p(494, 486), control2: p(502, 436))
-        inner.closeSubpath()
-        let foot = p(512, 812)
-        var smaller = CGAffineTransform(translationX: foot.x, y: foot.y).scaledBy(x: 0.72, y: 0.72)
-            .translatedBy(x: -foot.x, y: -foot.y)
-        return (outer, inner.copy(using: &smaller) ?? inner)
-    }()
-
-    /// The outline's width as a share of the point size, as heavy as a symbol's lines at that weight.
-    static func line(_ weight: NSFont.Weight) -> CGFloat {
-        switch weight.rawValue {
-        case ..<NSFont.Weight.regular.rawValue: 0.062
-        case ..<NSFont.Weight.medium.rawValue: 0.07
-        case ..<NSFont.Weight.semibold.rawValue: 0.075
-        case ..<NSFont.Weight.bold.rawValue: 0.085
-        default: 0.095
-        }
-    }
-
-    /// An image as a symbol at that point size would be: a template, which a button tints as it does a symbol,
-    /// unless it's given a color of its own.
+    /// The symbol at that point size and weight: a template, which a button tints as it does any symbol, unless
+    /// it's given a color of its own.
     static func image(pointSize: CGFloat, weight: NSFont.Weight, color: NSColor? = nil,
                       description: String = "Customize This App") -> NSImage {
-        let width = pointSize * line(weight)
-        let size = NSSize(width: (pointSize * aspect + width).rounded(.up), height: (pointSize + width).rounded(.up))
-        let image = NSImage(size: size, flipped: true) { box in
-            guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            let ink = (color ?? .black).cgColor
-            context.translateBy(x: (box.width - pointSize * aspect) / 2, y: (box.height - pointSize) / 2)
-            context.scaleBy(x: pointSize, y: pointSize)
-            context.addPath(paths.outer)
-            context.setLineWidth(width / pointSize)
-            context.setLineJoin(.round)
-            context.setStrokeColor(ink)
-            context.strokePath()
-            context.addPath(paths.inner)
-            context.setFillColor(ink)
-            context.fillPath()
-            return true
-        }
+        var configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+        if let color { configuration = configuration.applying(NSImage.SymbolConfiguration(paletteColors: [color])) }
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
+            .withSymbolConfiguration(configuration) ?? NSImage(size: NSSize(width: pointSize, height: pointSize))
         image.isTemplate = color == nil
-        image.accessibilityDescription = description
         return image
     }
 
-    /// The flame in SwiftUI, as tall as `size` points, in the foreground style.
+    /// The SwiftUI weight of the same name as an AppKit one.
+    static func fontWeight(_ weight: NSFont.Weight) -> Font.Weight {
+        switch weight.rawValue {
+        case ..<NSFont.Weight.light.rawValue: .thin
+        case ..<NSFont.Weight.regular.rawValue: .light
+        case ..<NSFont.Weight.medium.rawValue: .regular
+        case ..<NSFont.Weight.semibold.rawValue: .medium
+        case ..<NSFont.Weight.bold.rawValue: .semibold
+        case ..<NSFont.Weight.heavy.rawValue: .bold
+        default: .heavy
+        }
+    }
+
+    /// The symbol in SwiftUI, at `size` points, in the foreground style.
     struct Mark: View {
         var size: CGFloat
         var weight: NSFont.Weight = .medium
 
         var body: some View {
-            ZStack {
-                Flame(inner: false).stroke(style: StrokeStyle(lineWidth: size * LampGlyph.line(weight), lineJoin: .round))
-                Flame(inner: true).fill()
-            }
-            .frame(width: size * LampGlyph.aspect, height: size)
-            .padding(size * LampGlyph.line(weight) / 2)
+            Image(systemName: LampGlyph.symbol).font(.system(size: size, weight: LampGlyph.fontWeight(weight)))
         }
     }
-
-    private struct Flame: Shape {
-        let inner: Bool
-
-        func path(in rect: CGRect) -> Path {
-            Path(inner ? LampGlyph.paths.inner : LampGlyph.paths.outer)
-                .applying(CGAffineTransform(translationX: rect.minX, y: rect.minY).scaledBy(x: rect.height, y: rect.height))
-        }
-    }
-}#endif
+}
+#endif

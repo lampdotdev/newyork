@@ -6,7 +6,9 @@
 
 <p align="center"><a href="https://lampdotdev.github.io/newyork/"><img src=".github/play-in-browser.svg" width="220" height="48" alt="Play in your browser"></a>&nbsp;&nbsp;<a href="https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&amp;from=readme"><img src=".github/open-in-lamp.svg" width="164" height="48" alt="Open in Lamp"></a></p>
 
-<p align="center"><img src=".github/preview.png" width="720" alt="New York"></p>
+<p align="center"><a href=".github/showcase/reel.mp4"><img src=".github/showcase/loop.webp" width="720" alt="New York"></a></p>
+
+<p align="center"><a href=".github/showcase/reel.mp4">Watch it with sound</a></p>
 
 ## Make New York yours
 

@@ -1,4 +1,40 @@
 #!/bin/zsh
+LAMP_USAGE='  <key>NSMicrophoneUsageDescription</key><string>New York listens to your microphone.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>New York turns your speech into text.</string>
+  <key>NSCameraUsageDescription</key><string>New York uses your camera.</string>
+  <key>NSPhotoLibraryUsageDescription</key><string>New York uses your photos.</string>
+  <key>NSPhotoLibraryAddUsageDescription</key><string>New York saves pictures to your photos.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>New York reads and adds calendar events.</string>
+  <key>NSRemindersFullAccessUsageDescription</key><string>New York reads and adds reminders.</string>
+  <key>NSContactsUsageDescription</key><string>New York looks up people in your contacts.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>New York uses your location.</string>
+  <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>New York uses your location, also in the background.</string>
+  <key>NSMotionUsageDescription</key><string>New York uses the motion sensors and your step count.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>New York connects to Bluetooth devices.</string>
+  <key>NSFaceIDUsageDescription</key><string>New York unlocks with Face ID.</string>
+  <key>NSHealthShareUsageDescription</key><string>New York reads your health data.</string>
+  <key>NSHealthUpdateUsageDescription</key><string>New York saves health data.</string>
+  <key>NFCReaderUsageDescription</key><string>New York reads NFC tags.</string>
+  <key>NSSiriUsageDescription</key><string>New York works with Siri and Shortcuts.</string>
+  <key>NSNearbyInteractionUsageDescription</key><string>New York finds nearby devices.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>New York talks to Lamp on your Mac and to devices on your network.</string>
+  <key>NSAppleMusicUsageDescription</key><string>New York plays music from your library.</string>
+  <key>NSHomeKitUsageDescription</key><string>New York reads and controls your home.</string>'
+LAMP_MAC_USAGE='  <key>NSMicrophoneUsageDescription</key><string>New York listens to your microphone.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>New York turns your speech into text.</string>
+  <key>NSCameraUsageDescription</key><string>New York uses your camera.</string>
+  <key>NSPhotoLibraryUsageDescription</key><string>New York uses your photos.</string>
+  <key>NSPhotoLibraryAddUsageDescription</key><string>New York saves pictures to your photos.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>New York reads and adds calendar events.</string>
+  <key>NSRemindersFullAccessUsageDescription</key><string>New York reads and adds reminders.</string>
+  <key>NSContactsUsageDescription</key><string>New York looks up people in your contacts.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>New York connects to Bluetooth devices.</string>
+  <key>NSAppleEventsUsageDescription</key><string>New York reads your email and drafts replies through Mail.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>New York looks for printers and other devices on your network.</string>
+  <key>NSLocationUsageDescription</key><string>New York uses your location.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>New York uses your location.</string>
+  <key>NSAppleMusicUsageDescription</key><string>New York plays music from your library.</string>'
+LAMP_APP_NAME='New York'
 # Builds the game for this Mac (./build.sh mac, build/NewYork.app), the iPhone and iPad simulator (./build.sh ios,
 # build/iOS/NewYork.app) or Android (./build.sh android): the Swift around the page, with the page copied in.
 set -euo pipefail
@@ -62,8 +98,8 @@ if [[ "$PLACE" == "ios" ]]; then
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleExecutable</key><string>NewYork</string>
   <key>CFBundleIdentifier</key><string>dev.lamp.dev.app.newyork</string>
-  <key>CFBundleName</key><string>New York</string>
-  <key>CFBundleDisplayName</key><string>New York</string>
+  <key>CFBundleName</key><string>${LAMP_APP_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${LAMP_APP_NAME}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>CFBundleVersion</key><string>1</string>
@@ -77,27 +113,7 @@ if [[ "$PLACE" == "ios" ]]; then
   <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationLandscapeRight</string><string>UIInterfaceOrientationLandscapeLeft</string></array>
   <key>GCSupportsControllerUserInteraction</key><true/>
   <key>GCSupportedGameControllers</key><array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
-  <key>NSMicrophoneUsageDescription</key><string>New York listens to your microphone.</string>
-  <key>NSSpeechRecognitionUsageDescription</key><string>New York turns your speech into text.</string>
-  <key>NSCameraUsageDescription</key><string>New York uses your camera.</string>
-  <key>NSPhotoLibraryUsageDescription</key><string>New York uses your photos.</string>
-  <key>NSPhotoLibraryAddUsageDescription</key><string>New York saves pictures to your photos.</string>
-  <key>NSCalendarsFullAccessUsageDescription</key><string>New York reads and adds calendar events.</string>
-  <key>NSRemindersFullAccessUsageDescription</key><string>New York reads and adds reminders.</string>
-  <key>NSContactsUsageDescription</key><string>New York looks up people in your contacts.</string>
-  <key>NSLocationWhenInUseUsageDescription</key><string>New York uses your location.</string>
-  <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>New York uses your location, also in the background.</string>
-  <key>NSMotionUsageDescription</key><string>New York uses the motion sensors and your step count.</string>
-  <key>NSBluetoothAlwaysUsageDescription</key><string>New York connects to Bluetooth devices.</string>
-  <key>NSFaceIDUsageDescription</key><string>New York unlocks with Face ID.</string>
-  <key>NSHealthShareUsageDescription</key><string>New York reads your health data.</string>
-  <key>NSHealthUpdateUsageDescription</key><string>New York saves health data.</string>
-  <key>NFCReaderUsageDescription</key><string>New York reads NFC tags.</string>
-  <key>NSSiriUsageDescription</key><string>New York works with Siri and Shortcuts.</string>
-  <key>NSNearbyInteractionUsageDescription</key><string>New York finds nearby devices.</string>
-  <key>NSLocalNetworkUsageDescription</key><string>New York talks to Lamp on your Mac and to devices on your network.</string>
-  <key>NSAppleMusicUsageDescription</key><string>New York plays music from your library.</string>
-  <key>NSHomeKitUsageDescription</key><string>New York reads and controls your home.</string>
+${LAMP_USAGE}
   <key>DTPlatformName</key><string>iphonesimulator</string>
   <key>CFBundleSupportedPlatforms</key><array><string>iPhoneSimulator</string></array>
 </dict></plist>
@@ -125,27 +141,14 @@ else
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleExecutable</key><string>NewYork</string>
   <key>CFBundleIdentifier</key><string>dev.lamp.dev.app.newyork</string>
-  <key>CFBundleName</key><string>New York</string>
-  <key>CFBundleDisplayName</key><string>New York</string>
+  <key>CFBundleName</key><string>${LAMP_APP_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${LAMP_APP_NAME}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
   <key>GCSupportsGameMode</key><true/>
-  <key>NSMicrophoneUsageDescription</key><string>New York listens to your microphone.</string>
-  <key>NSSpeechRecognitionUsageDescription</key><string>New York turns your speech into text.</string>
-  <key>NSCameraUsageDescription</key><string>New York uses your camera.</string>
-  <key>NSPhotoLibraryUsageDescription</key><string>New York uses your photos.</string>
-  <key>NSPhotoLibraryAddUsageDescription</key><string>New York saves pictures to your photos.</string>
-  <key>NSCalendarsFullAccessUsageDescription</key><string>New York reads and adds calendar events.</string>
-  <key>NSRemindersFullAccessUsageDescription</key><string>New York reads and adds reminders.</string>
-  <key>NSContactsUsageDescription</key><string>New York looks up people in your contacts.</string>
-  <key>NSBluetoothAlwaysUsageDescription</key><string>New York connects to Bluetooth devices.</string>
-  <key>NSAppleEventsUsageDescription</key><string>New York reads your email and drafts replies through Mail.</string>
-  <key>NSLocalNetworkUsageDescription</key><string>New York looks for printers and other devices on your network.</string>
-  <key>NSLocationUsageDescription</key><string>New York uses your location.</string>
-  <key>NSLocationWhenInUseUsageDescription</key><string>New York uses your location.</string>
-  <key>NSAppleMusicUsageDescription</key><string>New York plays music from your library.</string>
+${LAMP_MAC_USAGE}
   <key>LampPlayer</key><dict><key>kind</key><string>game</string><key>scheme</key><string>lamp-game</string></dict>
   $PLAYED
   <key>NSPrincipalClass</key><string>NSApplication</string>
