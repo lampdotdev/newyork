@@ -67,11 +67,13 @@ import {
   streetZ
 } from './city-config.js';
 import { groundHeightNode } from './terrain.js';
+import { hot } from '../lamp-game.js';
 
 // Procedural city materials: facades and interiors, vegetation, roads, water and lighting effects.
 
-// Shared live uniforms controlled by lighting / time-of-day presets
-const cityUniforms = {
+// Shared live uniforms controlled by lighting / time-of-day presets. Lamp: kept while main.js runs again for a change
+// (lamp-game.js, "Running the game's code again"), since the parts of the city it keeps hold materials made with them.
+const cityUniforms = hot(import.meta).keep('cityUniforms', () => ({
   uSunColor: uniform(new THREE.Color(0xffca92)),
   uSkyTopColor: uniform(new THREE.Color(0x2c568c)),
   uSkyHorizonColor: uniform(new THREE.Color(0xebd1b5)),
@@ -79,7 +81,7 @@ const cityUniforms = {
   uInteriorGlow: uniform(0.78),
   uRoadWetness: uniform(0.38),
   uCanyonBounce: uniform(0.52)
-};
+}));
 
 // Fast deterministic 2D -> 1D hash in TSL
 const hash2D = Fn(([p]) => {

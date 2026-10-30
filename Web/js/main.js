@@ -118,12 +118,13 @@ async function initApp() {
   // Lamp: each part of the city is built into a group of its own, set on the ground and cut for culling there
   // (cityPart), and kept through a change that isn't its own (see the top of this file): `inputs` are what it's built
   // from, so a part built again builds again the parts made from it. Each part's time is in the "[init]" line.
-  function cityPart(build, { cull = false } = {}) {
+  // `cull` is setupSceneCulling, named in each part's build so a change to the culling builds the culled parts again.
+  function cityPart(build, { cull = null } = {}) {
     const group = new THREE.Group();
     const made = build(group);
     // Island-wide static geometry: chunk & distance-cull the small props, shadow stand-ins for the big casters
     // (scene-culling.js)
-    const culled = cull ? setupSceneCulling(group, [group], true) : [];
+    const culled = cull ? cull(group, [group], true) : [];
     return {
       group, made, culled,
       dispose() {
@@ -138,20 +139,20 @@ async function initApp() {
     // Lamp: the street level built flat at y = 0, set on the ground
     setOnTerrain(g.getObjectByName('ManhattanCityGrid'));
     return made;
-  }, { cull: true }), { inputs: [heights] });
+  }, { cull: setupSceneCulling }), { inputs: [heights] });
   const cityGrid = grid.made;
   markInit('cityGrid');
   await showLoadingStage('Building bridges and surrounding boroughs...');
-  const boroughPart = live.keep('boroughs', () => cityPart((g) => buildBoroughs(g, { sidewalks: grid.made.sidewalks }), { cull: true }),
+  const boroughPart = live.keep('boroughs', () => cityPart((g) => buildBoroughs(g, { sidewalks: grid.made.sidewalks }), { cull: setupSceneCulling }),
     { inputs: [heights, grid] });
   const boroughs = boroughPart.made;
   markInit('boroughs');
   await showLoadingStage('Building landmarks...');
-  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: true }), { inputs: [heights] });
+  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling }), { inputs: [heights] });
   const landmarkColliders = landmarks.made.colliders;
   markInit('landmarks');
   await showLoadingStage('Generating building footprints and facades...');
-  const blocks = live.keep('blocks', () => cityPart((g) => buildCityBlocks(g, landmarks.made.colliders), { cull: true }),
+  const blocks = live.keep('blocks', () => cityPart((g) => buildCityBlocks(g, landmarks.made.colliders), { cull: setupSceneCulling }),
     { inputs: [heights, landmarks] });
   const cityBlocks = blocks.made;
   markInit('blocks');
@@ -164,7 +165,7 @@ async function initApp() {
     const made = buildStreetDetails(g, allColliders);
     setOnTerrain(g.getObjectByName('ManhattanStreetDetails'));
     return made;
-  }, { cull: true }), { inputs: [heights, grid, boroughPart, landmarks, blocks] });
+  }, { cull: setupSceneCulling }), { inputs: [heights, grid, boroughPart, landmarks, blocks] });
   const streetDetails = details.made;
   markInit('streetDetails');
   await showLoadingStage('Creating traffic and pedestrian routes...');
@@ -194,6 +195,10 @@ async function initApp() {
     scene.add(part.group);
     cullAlso(part.culled);
   }
+  // What a part hooks on its scene's renders is on its group, which three.js never calls (the trees follow the view
+  // camera for their level of detail, trees.js): the scene calls it for each part.
+  const partHooks = parts.map((part) => part.group).filter((g) => g.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender);
+  scene.onBeforeRender = (...args) => { for (const g of partHooks) g.onBeforeRender(...args); };
   markInit('ground');
 
   // 4. Initialize Third-Person Controllers (Person, Car, Cyclist, Helicopter) & Multi-Camera System
