@@ -45,10 +45,12 @@ async function initApp() {
     loadingFill.style.transform = `scaleX(${Math.min(1, Math.max(0, p))})`;
   };
 
+  // Lamp: a start with the renderer kept (see the top of this file) shows no loading screen and doesn't wait for it
+  let warmStart = false;
   async function showLoadingStage(message) {
     if (loadingStatus) loadingStatus.textContent = message;
     if (loadingTrack) loadingTrack.classList.add('is-indeterminate');
-    if (document.hidden) return;
+    if (document.hidden || warmStart) return;
     // Let the label paint before synchronous work. The timeout also lets hidden tabs keep loading.
     await new Promise((resolve) => {
       const timeout = setTimeout(resolve, 100);
@@ -92,6 +94,14 @@ async function initApp() {
     initMark = now;
   };
 
+  // Whether this renderer has compiled the city's shaders already: kept with it, so the code running again for a change
+  // starts without the loading screen, the shader pass or the warm-up frame (what's new compiles as it's first drawn).
+  const warm = live.keep('warm', () => ({ compiled: false }), { inputs: [renderer] });
+  warmStart = warm.compiled;
+  if (warmStart && loadingOverlay) {
+    loadingOverlay.style.transition = 'none';
+    loadingOverlay.classList.add('hidden');
+  }
   markInit('renderer');
 
   // 2. Scene, atmosphere and lighting
@@ -785,7 +795,7 @@ async function initApp() {
   }
 
   // Lamp's preview plays out of sight, frame by frame, with no screen to wait for: the warm-up frame compiles there.
-  if (!window.lampPreview) await precompileShaders();
+  if (!window.lampPreview && !warmStart) await precompileShaders();
   markInit('compile');
   await showLoadingStage('Preparing shadows and the first frame...');
 
@@ -835,7 +845,7 @@ async function initApp() {
     for (const root of dynamicRoots) root.updateMatrixWorld();
 
     // Render frame via TSL RenderPipeline (SSR + Bloom)
-    if (!warmedUp) {
+    if (!warmedUp && !warmStart) {
       // First frame = pipeline warm-up behind the loading screen, for what precompileShaders() can't reach (the shadow
       // map passes): with frustum culling off, every visible material's pipelines compile now instead of stalling the
       // first time the camera turns towards it (one chunk / shadow stand-in per shared pipeline is enough)
@@ -869,6 +879,7 @@ async function initApp() {
         // Lamp's preview draws no frames on a screen, so a fade would never finish there: it goes at once.
         if (loadingOverlay && window.lampPreview) loadingOverlay.style.transition = 'none';
         if (loadingOverlay) loadingOverlay.classList.add('hidden');
+        warm.compiled = true;
         audioSystem.ready = true;
         // Lamp: the Mac app lets the page play sound unasked, so the city is heard as it appears, not at the first key
         audioSystem.unlock();
