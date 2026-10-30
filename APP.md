@@ -24,7 +24,8 @@ for WALK, round corners and jump out of the way of a car.
 - **A controller** paired with the device works too (`gamepad-controls.js`, from the original, reading the first pad Lamp's
   runtime gives each frame, which is also how Lamp's preview drives it): left stick move or steer,
   right stick look, RT and LT gas and brake (up and down in the helicopter), A jump, LB and RB change mode, Y
-  the camera, R3 recentres it, the d-pad zooms, Menu the map and B closes it.
+  the camera, R3 recentres it, the d-pad zooms, Menu the map and B closes it. To drive in Lamp's preview, hold
+  `key` rt (gas) with the left `stick` (steer): the stick alone doesn't move a car, bike or helicopter forward.
 - The guide to the controls over the modes, and the keys on the HUD's buttons, show what the player is holding:
   keys on the keyboard, the controller's own buttons (an Xbox's, a PlayStation's or a Switch's) once one is played
   with, and on a touch screen the touch controls instead (`input()`, `label()` and `glyph()` from lamp-game.js, in
