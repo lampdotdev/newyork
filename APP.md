@@ -127,8 +127,11 @@ takes that long.
 Most changes go into the city as it's played, with nothing built again and the player where they are: the HUD's look
 (`css/style.css`), how the player moves and the vehicles' tuning (`controllers.js`), the cameras (`cameras.js`), the
 time presets (`lighting.js`), the map's drawing (`nyc-map.js`) and the controller (`gamepad-controls.js`), each a class
-in a module ending with `hot(import.meta).accept()` from lamp-game.js ("Changes while it's played" there). What their
-constructors built once (the vehicles' bodies, the keys, the map's buttons) and everything else (the city's modules,
-`main.js`, `index.html`) is built as the game starts: a change to it opens the game again, which comes back where the
-player was. Something new that changes as it's played (a mission, a race) goes in a module of its own the same way, a
-class `main.js` makes one of.
+in a module ending with `hot(import.meta).accept()` from lamp-game.js ("Changes while it's played" there). Anything
+else (`main.js`, `index.html`, what those constructors built once, a new module) runs the game's code again in place,
+back where the player was, in a couple of seconds: `main.js` keeps the renderer and each part of the city
+(`live.keep`), and builds a part again only when its own code, or a part it's built from (its `inputs`), changed, so
+a change to the trees builds the street details, traffic and road paint again and the rest stays. A new part of the
+city goes the same way: built by its own module into the group `cityPart` gives it, set on the ground inside that
+build, and kept in `main.js` with the parts it's built from as its inputs. Something new that changes as it's played
+(a mission, a race) goes in a module of its own, a class `main.js` makes one of.

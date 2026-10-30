@@ -1,5 +1,5 @@
 // Lamp's game runtime first: in Lamp's preview it sets the clock and random numbers before anything reads them.
-import { game, save, load, input, onInput, label, glyph, pendingRestore, BUTTON, STICK, TRIGGER } from '../lamp-game.js';
+import { game, hot, save, load, input, onInput, label, glyph, pendingRestore, BUTTON, STICK, TRIGGER } from '../lamp-game.js';
 import * as THREE from 'three/webgpu';
 import { pass, mrt, output, normalView, positionView, metalness, roughness, vec2, vec3, smoothstep } from 'three/tsl';
 import { ssr } from 'three/addons/tsl/display/SSRNode.js';
@@ -19,11 +19,18 @@ import { GamepadControls } from './gamepad-controls.js';
 import { CameraSystem, CAMERA_PRESETS } from './cameras.js';
 import { LightingSystem } from './lighting.js';
 import { NYCMapSystem } from './nyc-map.js';
-import { setupSceneCulling, updateSceneCulling } from './scene-culling.js';
+import { setupSceneCulling, updateSceneCulling, cullAlso, showShadowStandIns } from './scene-culling.js';
 import { loadTerrain, setOnTerrain, groundHeight } from './terrain.js';
 import { CityAudioSystem } from './audio-system.js';
 
 // Application setup, shader warm-up and frame loop.
+//
+// Lamp: a change that can't be swapped into the running city runs this file's code again in place (lamp-game.js,
+// "Running the game's code again"). What's slow to make is kept through that with live.keep: the renderer and its
+// compiled shaders, the ground's heights (terrain.js) and each part of the city, which is built again only when its own
+// code, or a part it's built from (its `inputs`), changed. Everything else here (the HUD, the controllers, the
+// cameras, the lighting, the sound) is made again from the page as it is now.
+const live = hot(import.meta);
 
 async function initApp() {
   const container = document.getElementById('canvas-container');
@@ -38,10 +45,12 @@ async function initApp() {
     loadingFill.style.transform = `scaleX(${Math.min(1, Math.max(0, p))})`;
   };
 
+  // Lamp: a start with the renderer kept (see the top of this file) shows no loading screen and doesn't wait for it
+  let warmStart = false;
   async function showLoadingStage(message) {
     if (loadingStatus) loadingStatus.textContent = message;
     if (loadingTrack) loadingTrack.classList.add('is-indeterminate');
-    if (document.hidden) return;
+    if (document.hidden || warmStart) return;
     // Let the label paint before synchronous work. The timeout also lets hidden tabs keep loading.
     await new Promise((resolve) => {
       const timeout = setTimeout(resolve, 100);
@@ -66,11 +75,11 @@ async function initApp() {
     bloom: true,
     boroughs: true
   };
-  const renderer = new THREE.WebGPURenderer({
-    antialias: QUALITY.antialias,
-    powerPreference: 'high-performance',
-    reversedDepthBuffer: true,
-    forceWebGL: true
+  // Kept through a change: a new one would compile every shader again.
+  const renderer = await live.keep('renderer', async () => {
+    const made = new THREE.WebGPURenderer({ antialias: true, powerPreference: 'high-performance', reversedDepthBuffer: true, forceWebGL: true });
+    await made.init();
+    return made;
   });
   // Lamp's runtime draws it at 1920x1080 and fits that to the window (game() below).
   renderer.shadowMap.enabled = QUALITY.shadows;
@@ -85,7 +94,14 @@ async function initApp() {
     initMark = now;
   };
 
-  await renderer.init();
+  // Whether this renderer has compiled the city's shaders already: kept with it, so the code running again for a change
+  // starts without the loading screen, the shader pass or the warm-up frame (what's new compiles as it's first drawn).
+  const warm = live.keep('warm', () => ({ compiled: false }), { inputs: [renderer] });
+  warmStart = warm.compiled;
+  if (warmStart && loadingOverlay) {
+    loadingOverlay.style.transition = 'none';
+    loadingOverlay.classList.add('hidden');
+  }
   markInit('renderer');
 
   // 2. Scene, atmosphere and lighting
@@ -96,48 +112,93 @@ async function initApp() {
 
   // Lamp: the ground's real heights, which everything below is set on (terrain.js)
   await showLoadingStage('Reading the ground\'s heights...');
-  await loadTerrain();
+  const heights = await loadTerrain();
   markInit('terrain');
   // 3. Build Manhattan Geography, Iconic Landmarks, Blocks, Street Details & Traffic
+  // Lamp: each part of the city is built into a group of its own, set on the ground and cut for culling there
+  // (cityPart), and kept through a change that isn't its own (see the top of this file): `inputs` are what it's built
+  // from, so a part built again builds again the parts made from it. Each part's time is in the "[init]" line.
+  // `cull` is setupSceneCulling, named in each part's build so a change to the culling builds the culled parts again.
+  function cityPart(build, { cull = null } = {}) {
+    const group = new THREE.Group();
+    const made = build(group);
+    // Island-wide static geometry: chunk & distance-cull the small props, shadow stand-ins for the big casters
+    // (scene-culling.js)
+    const culled = cull ? cull(group, [group], true) : [];
+    return {
+      group, made, culled,
+      dispose() {
+        group.removeFromParent();
+        group.traverse((o) => { o.geometry?.dispose(); for (const m of [o.material].flat()) m?.dispose?.(); });
+      }
+    };
+  }
   await showLoadingStage('Building streets, parks and waterfronts...');
-  const cityGrid = buildCityGrid(scene);
+  const grid = live.keep('grid', () => cityPart((g) => {
+    const made = buildCityGrid(g);
+    // Lamp: the street level built flat at y = 0, set on the ground
+    setOnTerrain(g.getObjectByName('ManhattanCityGrid'));
+    return made;
+  }, { cull: setupSceneCulling }), { inputs: [heights] });
+  const cityGrid = grid.made;
   markInit('cityGrid');
   await showLoadingStage('Building bridges and surrounding boroughs...');
-  const boroughs = buildBoroughs(scene, { sidewalks: cityGrid.sidewalks });
+  const boroughPart = live.keep('boroughs', () => cityPart((g) => buildBoroughs(g, { sidewalks: grid.made.sidewalks }), { cull: setupSceneCulling }),
+    { inputs: [heights, grid] });
+  const boroughs = boroughPart.made;
   markInit('boroughs');
   await showLoadingStage('Building landmarks...');
-  const { colliders: landmarkColliders } = buildLandmarks(scene);
+  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling }), { inputs: [heights] });
+  const landmarkColliders = landmarks.made.colliders;
   markInit('landmarks');
   await showLoadingStage('Generating building footprints and facades...');
-  const cityBlocks = buildCityBlocks(scene, landmarkColliders);
+  const blocks = live.keep('blocks', () => cityPart((g) => buildCityBlocks(g, landmarks.made.colliders), { cull: setupSceneCulling }),
+    { inputs: [heights, landmarks] });
+  const cityBlocks = blocks.made;
   markInit('blocks');
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...boroughs.colliders, ...(cityGrid.colliders || [])];
 
   await showLoadingStage('Placing trees, streetlights and street furniture...');
-  const streetDetails = buildStreetDetails(scene, allColliders);
+  // Lamp: trees, lamps and street furniture were placed on the ground as they were built; the street level under them
+  // is set on it here
+  const details = live.keep('streetDetails', () => cityPart((g) => {
+    const made = buildStreetDetails(g, allColliders);
+    setOnTerrain(g.getObjectByName('ManhattanStreetDetails'));
+    return made;
+  }, { cull: setupSceneCulling }), { inputs: [heights, grid, boroughPart, landmarks, blocks] });
+  const streetDetails = details.made;
   markInit('streetDetails');
   await showLoadingStage('Creating traffic and pedestrian routes...');
   // Buildings turned along non-grid streets have oriented colliders whose world bounds reach past their lots: they stay
   // inside the property line anyway, so the road network (lanes & sidewalks) doesn't need them.
   // Elevated building sections that clear even a bus don't obstruct ground traffic (Lamp: measured from the ground
   // under them, as colliders' heights are the world's since the city stands on terrain.js's heights).
-  const trafficSystem = createTrafficSystem(scene, cityGrid.sidewalks, [
-    ...cityGrid.footprints,
-    ...streetDetails.footprints,
+  const traffic = live.keep('traffic', () => cityPart((g) => createTrafficSystem(g, grid.made.sidewalks, [
+    ...grid.made.footprints,
+    ...details.made.footprints,
     ...allColliders.filter((c) => !c.obb
       && (c.minY ?? 0) - groundHeight((c.minX + c.maxX) * 0.5, (c.minZ + c.maxZ) * 0.5) < 3.5)
-  ], streetDetails.signalIntersections);
+  ], details.made.signalIntersections)), { inputs: [heights, grid, boroughPart, landmarks, blocks, details] });
+  const trafficSystem = traffic.made;
   markInit('traffic');
-  const highwayTraffic = createHighwayTraffic(scene, cityGrid.highwayLanes);
+  const highway = live.keep('highwayTraffic', () => cityPart((g) => createHighwayTraffic(g, grid.made.highwayLanes)), { inputs: [grid] });
+  const highwayTraffic = highway.made;
   await showLoadingStage('Adding road markings...');
-  const roadMarkings = buildRoadPaint(scene, trafficSystem.network);
+  const roadPaint = live.keep('roadPaint', () => cityPart((g) => {
+    const made = buildRoadPaint(g, traffic.made.network);
+    setOnTerrain(made, 0); // vertex by vertex: its strips come cut to length (road-paint.js)
+    return made;
+  }), { inputs: [heights, traffic] });
   markInit('roadPaint');
-
-  // Lamp: the street level built flat at y = 0, set on the ground: buildings, landmarks and trees were placed on it as
-  // they were built
-  setOnTerrain(scene.getObjectByName('ManhattanCityGrid'));
-  setOnTerrain(scene.getObjectByName('ManhattanStreetDetails'));
-  setOnTerrain(roadMarkings, 0); // vertex by vertex: its strips come cut to length (road-paint.js)
+  const parts = [grid, boroughPart, landmarks, blocks, details, traffic, highway, roadPaint];
+  for (const part of parts) {
+    scene.add(part.group);
+    cullAlso(part.culled);
+  }
+  // What a part hooks on its scene's renders is on its group, which three.js never calls (the trees follow the view
+  // camera for their level of detail, trees.js): the scene calls it for each part.
+  const partHooks = parts.map((part) => part.group).filter((g) => g.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender);
+  scene.onBeforeRender = (...args) => { for (const g of partHooks) g.onBeforeRender(...args); };
   markInit('ground');
 
   // 4. Initialize Third-Person Controllers (Person, Car, Cyclist, Helicopter) & Multi-Camera System
@@ -192,13 +253,8 @@ async function initApp() {
   document.addEventListener('visibilitychange', () => { if (document.hidden) savePlayerState(); });
   markInit('controllers');
 
-  // Island-wide static geometry: chunk & distance-cull the small props, shadow stand-ins for the big casters
-  // (scene-culling.js)
-  await showLoadingStage('Preparing scene visibility and shadows...');
-  const cullingRoots = ['ManhattanCityGrid', 'ManhattanCityBlocks', 'ManhattanStreetDetails', 'ManhattanLandmarks', 'Boroughs']
-    .map((name) => scene.getObjectByName(name))
-    .filter(Boolean);
-  setupSceneCulling(scene, cullingRoots, lightingSystem.sunLight.shadow);
+  // The shadow stand-ins each part made (cityPart) draw in this run's sun shadow
+  showShadowStandIns(lightingSystem.sunLight.shadow);
 
   // Initialize static world matrices once, including the chunks and shadow proxies created above.
   // Crowd, tree and building-detail animation changes instance/pose buffers, not Object3D transforms.
@@ -744,7 +800,7 @@ async function initApp() {
   }
 
   // Lamp's preview plays out of sight, frame by frame, with no screen to wait for: the warm-up frame compiles there.
-  if (!window.lampPreview) await precompileShaders();
+  if (!window.lampPreview && !warmStart) await precompileShaders();
   markInit('compile');
   await showLoadingStage('Preparing shadows and the first frame...');
 
@@ -794,7 +850,7 @@ async function initApp() {
     for (const root of dynamicRoots) root.updateMatrixWorld();
 
     // Render frame via TSL RenderPipeline (SSR + Bloom)
-    if (!warmedUp) {
+    if (!warmedUp && !warmStart) {
       // First frame = pipeline warm-up behind the loading screen, for what precompileShaders() can't reach (the shadow
       // map passes): with frustum culling off, every visible material's pipelines compile now instead of stalling the
       // first time the camera turns towards it (one chunk / shadow stand-in per shared pipeline is enough)
@@ -828,6 +884,7 @@ async function initApp() {
         // Lamp's preview draws no frames on a screen, so a fade would never finish there: it goes at once.
         if (loadingOverlay && window.lampPreview) loadingOverlay.style.transition = 'none';
         if (loadingOverlay) loadingOverlay.classList.add('hidden');
+        warm.compiled = true;
         audioSystem.ready = true;
         // Lamp: the Mac app lets the page play sound unasked, so the city is heard as it appears, not at the first key
         audioSystem.unlock();
