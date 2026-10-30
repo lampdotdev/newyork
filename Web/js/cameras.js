@@ -28,17 +28,21 @@ const CAMERA_PRESETS = [
 ];
 
 class CameraSystem {
-  constructor(domElement, controllerManager) {
-    systems.add(this);
-    this.domElement = domElement;
-    this.controllerManager = controllerManager;
-
-    this.camera = new THREE.PerspectiveCamera(
+  static makeCamera() {
+    return new THREE.PerspectiveCamera(
       56,
       window.innerWidth / window.innerHeight,
       0.35,
       60000 // at 1:1 the boroughs & harbor run out ~20-40 km to the fogged horizon (reversed float depth keeps precision)
     );
+  }
+
+  constructor(domElement, controllerManager, camera = CameraSystem.makeCamera()) {
+    systems.add(this);
+    this.domElement = domElement;
+    this.controllerManager = controllerManager;
+
+    this.camera = camera;
 
     this.activePresetId = 'chase';
     this.orbitYawOffset = 0.0;
