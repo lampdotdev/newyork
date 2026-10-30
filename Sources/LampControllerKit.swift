@@ -73,7 +73,9 @@ import Foundation
 /// the iPhone and the iPad (`GameKit.controllerKit`), where LampPage.swift runs it.
 public final class ControllerRuntime: @unchecked Sendable {
     public let app: String
-    private let root: URL
+    /// The page served: the bundle's, or the newer one Lamp gave the game as it's played (`use`).
+    private var root: URL
+    private var version: String?
     private let queue = DispatchQueue(label: "dev.lamp.controllers")
     private var key: SymmetricKey?
     private var relay: Relay?
@@ -92,6 +94,20 @@ public final class ControllerRuntime: @unchecked Sendable {
         self.app = app
         self.root = root
     }
+
+    /// Serves a newer page, as Lamp handed it to the game (`LampPageLive`), under the session that's open: every player
+    /// keeps their seat, and each phone's page finds the new version and opens again from it.
+    public func use(page root: URL, version: String, _ done: @escaping @Sendable () -> Void = {}) {
+        queue.async {
+            self.root = root
+            self.version = version
+            self.site?.use(page: root, version: version)
+            done()
+        }
+    }
+
+    /// The same, waiting for it: for tests.
+    public func useNow(page root: URL, version: String) { queue.sync { self.root = root; self.version = version; site?.use(page: root, version: version) } }
 
     /// The game's session, opened if it isn't: what `/app/controller` answers, with its status. On the runtime's own
     /// queue, never the caller's, since opening waits for the system to give each listener its port.
@@ -182,7 +198,8 @@ public final class ControllerRuntime: @unchecked Sendable {
     }
 
     private func openSite() {
-        let site = PhonePageServer(port: 0, root: root, app: app, hosts: hosts, relayPort: { [weak self] in self?.currentRelayPort })
+        if version == nil { version = (try? ControllerSnapshot.read(root))?.version }
+        let site = PhonePageServer(port: 0, root: root, version: version, app: app, hosts: hosts, relayPort: { [weak self] in self?.currentRelayPort })
         let ready = DispatchSemaphore(value: 0)
         let listening = Said<Bool>()
         site.start(ready: { ok in listening.value = ok; ready.signal() }, onFailure: { [weak self, weak site] in
@@ -683,11 +700,14 @@ import Network
 /// One game's phone page, served by the game itself (`ControllerRuntime`) on a port of its own, as Lamp serves a TV
 /// app's page (`PhoneSites`): each game's page is an origin of its own in a phone's browser. Plain GETs of the files of
 /// the page Lamp put in the game's bundle (`ControllerSnapshot`), from a phone on the network by one of the device's names
-/// or addresses, or on the device by a loopback name; and `lamp-relay.json`, where lamp-controller.js opens its socket.
+/// or addresses, or on the device by a loopback name; `lamp-relay.json`, where lamp-controller.js opens its socket; and
+/// `lamp-phone.json`, the version of the page served now, which an open page reads to find a newer one (`use`).
 public final class PhonePageServer: @unchecked Sendable {
     /// The port asked for (0: any the system gives), then the one it listens on once it does.
     public private(set) var port: UInt16?
-    private let root: URL
+    /// The page served, and its version: swapped whole (`use`), so every answer is from the one or the other.
+    private var served: (root: URL, version: String?)
+    private let servedLock = NSLock()
     private let app: String
     private let queue = DispatchQueue(label: "dev.lamp.controllers.page")
     private var listener: NWListener?
@@ -700,12 +720,31 @@ public final class PhonePageServer: @unchecked Sendable {
     private let hosts: @Sendable () -> Set<String>
     private let relayPort: @Sendable () -> UInt16?
 
-    public init(port: UInt16 = 0, root: URL, app: String, hosts: @escaping @Sendable () -> Set<String>, relayPort: @escaping @Sendable () -> UInt16?) {
+    /// Where an open page reads the version served now, and the mark at the top of a page saying the version it is: an
+    /// HTML comment, which comes before the doctype without changing how the page is drawn. A host with neither (an LG
+    /// TV's, an Xbox's, a game built by an earlier Lamp) leaves lamp-controller.js with nothing to compare, and the page
+    /// stays as it opened.
+    public static let versionFile = "lamp-phone.json"
+
+    public static func marked(_ html: Data, version: String) -> Data {
+        Data("<!--lamp-phone \(version)-->\n".utf8) + html
+    }
+
+    public static func versionAnswer(_ version: String) -> Data {
+        (try? JSONSerialization.data(withJSONObject: ["version": version])) ?? Data()
+    }
+
+    public init(port: UInt16 = 0, root: URL, version: String? = nil, app: String, hosts: @escaping @Sendable () -> Set<String>, relayPort: @escaping @Sendable () -> UInt16?) {
         self.port = port
-        self.root = root
+        self.served = (root, version)
         self.app = app
         self.hosts = hosts
         self.relayPort = relayPort
+    }
+
+    /// Serves this page from now on: phones open on the last one find `version` and open again from it.
+    public func use(page root: URL, version: String?) {
+        servedLock.withLock { served = (root, version) }
     }
 
     /// Starts listening on every interface at its port; `ready` hears true once it does (and `port` says where), false
@@ -813,15 +852,16 @@ public final class PhonePageServer: @unchecked Sendable {
     /// name lead here (DNS rebinding) reads nothing.
     public func answer(path full: String, host: String?) -> Page {
         guard Self.names(host, among: hosts()) else { return Page(status: 403, body: Data("Not for this host.".utf8)) }
+        let (root, version) = servedLock.withLock { served }
         let reach = PhonePagePolicy.reach(fileAt: root.appendingPathComponent(PhonePagePolicy.reachFile))
-        var page = file(path: full, held: reach != .unrestricted)
+        var page = file(path: full, in: root, version: version, held: reach != .unrestricted)
         page.policy = PhonePagePolicy.header(host: host, relayPort: relayPort(), reach: reach)
         return page
     }
 
     /// `held`: the page has rules, which lamp-relay.json says (`policy`), so lamp-controller.js only ever takes a refused
     /// socket for a moved relay on a page Lamp gave rules to.
-    private func file(path full: String, held: Bool) -> Page {
+    private func file(path full: String, in root: URL, version: String?, held: Bool) -> Page {
         let missing = Page(status: 404, body: Data("Nothing here. Open the game first.".utf8))
         let path = full.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
         guard path.hasPrefix("/") else { return missing }
@@ -836,6 +876,10 @@ public final class PhonePageServer: @unchecked Sendable {
             }
             return Page(status: 200, type: Self.type(for: "json"), body: body)
         }
+        if names == [Self.versionFile] {
+            guard let version else { return missing }
+            return Page(status: 200, type: Self.type(for: "json"), body: Self.versionAnswer(version))
+        }
         let relative = names.joined(separator: "/")
         guard names.allSatisfy({ !$0.contains("/") }), ControllerSnapshot.isServed(relative) else { return missing }
         var steps = [root]
@@ -845,7 +889,8 @@ public final class PhonePageServer: @unchecked Sendable {
         let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
         guard values?.isRegularFile == true, (values?.fileSize ?? 0) <= ControllerSnapshot.fileLimit,
               let data = try? Data(contentsOf: file) else { return missing }
-        return Page(status: 200, type: Self.type(for: file.pathExtension), body: data)
+        let html = ["html", "htm"].contains(file.pathExtension.lowercased())
+        return Page(status: 200, type: Self.type(for: file.pathExtension), body: html && version != nil ? Self.marked(data, version: version!) : data)
     }
 
     /// Whether a Host header names one of `hosts`, with at most a numeric port after it.

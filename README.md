@@ -14,9 +14,9 @@
 
 Each opens Lamp with a copy of New York and that change, ready to send:
 
-- [Make it a snowy winter night](https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&from=readme&ask=Make%20it%20a%20snowy%20winter%20night)
-- [Make it a lot more fun](https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&from=readme&ask=Make%20it%20a%20lot%20more%20fun)
-- [Move the city to the Moon](https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&from=readme&ask=Move%20the%20city%20to%20the%20Moon)
+- [Give me a sports car](https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&from=readme&ask=Give%20me%20a%20sports%20car)
+- [Let me pick up taxi fares](https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&from=readme&ask=Let%20me%20pick%20up%20taxi%20fares)
+- [Let me play as a monster](https://lamp.dev/?repo=https://github.com/lampdotdev/newyork&from=readme&ask=Let%20me%20play%20as%20a%20monster)
 
 ## Open it in Lamp
 

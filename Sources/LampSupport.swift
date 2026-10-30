@@ -4055,14 +4055,15 @@
                 && !($0 is LampTransition.Glass) && !($0 is LampSidebar.Beside) }
         }
 
-        /// Picture pixels per window point: at most 1400 pixels on the long side, a size models see unscaled.
+        /// Picture pixels per window point: at most 1024 pixels on the long side, a size models see unscaled and read
+        /// a window's words in, at half the bytes and tokens of 1400: every picture is sent again with each request.
         @MainActor
         static func scale(of window: NSWindow) -> CGFloat {
             let size = (window.contentView?.superview ?? window.contentView)?.bounds.size ?? window.frame.size
-            return min(window.backingScaleFactor, 1400 / max(size.width, size.height))
+            return min(window.backingScaleFactor, 1024 / max(size.width, size.height))
         }
 
-        /// The window with its title bar, at most 1400 pixels on the long side. It's the window as the system
+        /// The window with its title bar, at most 1024 pixels on the long side. It's the window as the system
         /// shows it, so video, maps and web pages are in the picture; asking for one's own windows needs no
         /// screen recording permission. If the system has no picture (the app is hidden), the app draws one itself,
         /// which leaves those out.
@@ -4222,7 +4223,7 @@
 
     // LampTransition
     /// While Lamp builds a change for this app, smoke curls up from the bottom of its windows, and when the change
-    /// goes in a band of white whooshes up across them once, so the change looks alive rather than abrupt. Only Lamp starts it: the
+    /// goes in Lamp's stripes roll up across them once, so the change looks alive rather than abrupt. Only Lamp starts it: the
     /// request is signed with the app's token (the "lampTransitionSignature" key marks the builds that understand
     /// it), and nothing here is reachable from the app's own code. It's drawn in clear windows laid over the app's
     /// (children, so they move and stack with them) that let every click through, and the pictures Lamp takes for
@@ -4301,7 +4302,7 @@
             }
         }
 
-        /// The change went in: the band whooshes up each window once (a soft wash where motion is reduced), then the smoke and the glow go.
+        /// The change went in: the stripes roll up each window once (fading where motion is reduced), then the smoke and the glow go.
         @MainActor static func land() {
             timeout?.cancel()
             if glasses.isEmpty {
@@ -4397,20 +4398,24 @@
         /// The effect's layers, filling the window they're laid over and cut to its rounding. Core Animation runs
         /// them out of the app's process, so they keep moving while the app is busy taking the change in.
         ///
-        /// While the change is built, smoke in many colors curls up from the bottom edge, thick there and thinning as
-        /// it rises a third of the way up, with a faint glow round the edge: noticeable on any ground, and out of the way
-        /// of most of the window. When the change goes in the smoke surges for a moment, then a level band of white,
-        /// the window's width, whooshes from the bottom to the top with a soft gray shadow just ahead of it, covering the
-        /// moment the new code draws and leaving the window clear behind it.
+        /// While the change is built, smoke in Lamp's stripe colors curls up from the bottom edge, thick there and thinning
+        /// as it rises a third of the way up, with a faint glow round the edge: noticeable on any ground, and out of the way
+        /// of most of the window. When the change goes in the smoke surges for a moment, then the stripes roll up the window
+        /// on Lamp's slant, as if round a drum: each comes in as a thin line, widens to the middle and thins again as it
+        /// leaves, and at the middle of the roll they cover the window whole, leaving it clear behind them.
         @MainActor final class Look: NSView {
-            /// The colors the smoke mixes: blue, violet, pink, orange and teal.
+            /// Lamp's stripes, in the order they come up: green, lime, yellow, orange, red and magenta.
             static let hues: [NSColor] = [
-                NSColor(red: 0.25, green: 0.5, blue: 1, alpha: 1),
-                NSColor(red: 0.6, green: 0.38, blue: 1, alpha: 1),
-                NSColor(red: 1, green: 0.38, blue: 0.68, alpha: 1),
-                NSColor(red: 1, green: 0.6, blue: 0.22, alpha: 1),
-                NSColor(red: 0.2, green: 0.82, blue: 0.9, alpha: 1),
+                NSColor(red: 0.122, green: 0.541, blue: 0.29, alpha: 1),
+                NSColor(red: 0.486, green: 0.749, blue: 0.227, alpha: 1),
+                NSColor(red: 0.965, green: 0.722, blue: 0.11, alpha: 1),
+                NSColor(red: 0.941, green: 0.541, blue: 0.11, alpha: 1),
+                NSColor(red: 0.886, green: 0.251, blue: 0.165, alpha: 1),
+                NSColor(red: 0.824, green: 0.216, blue: 0.471, alpha: 1),
             ]
+
+            /// The stripes' slant, as on the website: rising to the right.
+            private static let slant: CGFloat = .pi / 6
 
             /// The window's own rounding, so the glow follows its corners.
             var cornerRadius: CGFloat = 12 {
@@ -4424,8 +4429,7 @@
 
             private let glowLayer = CALayer()
             private let wisps = CAEmitterLayer()
-            private let band = CAGradientLayer()
-            private let wash = CALayer()
+            private let stripes = CALayer()
             private var arranged = CGRect.zero
 
             override init(frame: NSRect) {
@@ -4434,7 +4438,7 @@
                 autoresizingMask = [.width, .height]
                 layer?.masksToBounds = true
                 layer?.cornerRadius = cornerRadius
-                for sublayer in [glowLayer, wash, wisps, band] {
+                for sublayer in [glowLayer, wisps, stripes] {
                     sublayer.opacity = 0
                     layer?.addSublayer(sublayer)
                 }
@@ -4500,7 +4504,7 @@
                     cell.contents = Self.puff
                     cell.color = hue.withAlphaComponent(0.42).cgColor
                     cell.redRange = 0.08; cell.greenRange = 0.08; cell.blueRange = 0.08
-                    cell.birthRate = Float(bounds.width / 55)
+                    cell.birthRate = Float(bounds.width / 66)
                     cell.lifetime = life; cell.lifetimeRange = 1.5
                     cell.velocity = rise; cell.velocityRange = rise * 0.45
                     cell.emissionLongitude = .pi / 2; cell.emissionRange = 0.55
@@ -4511,20 +4515,38 @@
                     return cell
                 }
 
-                // The band: the window's width and level, white through its body, fading out below where it's been, and
-                // a narrow gray shadow just above its top edge, ahead of it. Its colors run from the bottom of the layer up.
-                let height = max(bounds.height * 0.4, 120), shadow: CGFloat = 24
-                band.frame = CGRect(x: 0, y: -height - shadow, width: bounds.width, height: height + shadow)
-                band.startPoint = CGPoint(x: 0.5, y: 0)
-                band.endPoint = CGPoint(x: 0.5, y: 1)
-                let top = Double(height / (height + shadow))
-                band.colors = [NSColor(white: 1, alpha: 0), NSColor(white: 1, alpha: 0.85), NSColor(white: 1, alpha: 1), NSColor(white: 1, alpha: 1),
-                               NSColor(white: 0.35, alpha: 0.22), NSColor(white: 0.2, alpha: 0)].map(\.cgColor)
-                band.locations = [0, NSNumber(value: top * 0.45), NSNumber(value: top * 0.7), NSNumber(value: top),
-                                  NSNumber(value: top + 0.001), 1]
+                // The stripes: level in a layer turned to the slant and just big enough that, across its height, they reach
+                // from one corner of the window to the opposite one. Each starts with no height, waiting at the bottom.
+                let along = bounds.width * cos(Self.slant) + bounds.height * sin(Self.slant)
+                let across = bounds.width * sin(Self.slant) + bounds.height * cos(Self.slant)
+                stripes.bounds = CGRect(x: 0, y: 0, width: along, height: across)
+                stripes.position = CGPoint(x: bounds.midX, y: bounds.midY)
+                stripes.setAffineTransform(CGAffineTransform(rotationAngle: Self.slant))
+                stripes.sublayers?.forEach { $0.removeFromSuperlayer() }
+                for (index, hue) in Self.hues.enumerated() {
+                    let stripe = CALayer()
+                    stripe.backgroundColor = hue.cgColor
+                    stripe.allowsEdgeAntialiasing = true
+                    stripe.anchorPoint = .zero
+                    Self.place(stripe, index: index, roll: 0, across: across, along: along)
+                    stripes.addSublayer(stripe)
+                }
+            }
 
-                wash.frame = bounds
-                wash.backgroundColor = NSColor(white: 1, alpha: 0.35).cgColor
+            /// Where a stripe's edges are at a point of the roll, from 0 to 2π: the stripes lie side by side round a drum
+            /// whose near half is the window. An edge's height is the drum's seen from the front, so the stripes are thin
+            /// where the drum turns away, top and bottom, and the six together are as tall as the window at π.
+            private static func edges(index: Int, roll: CGFloat, across: CGFloat) -> (bottom: CGFloat, top: CGFloat) {
+                let share = CGFloat.pi / CGFloat(hues.count)
+                func height(_ angle: CGFloat) -> CGFloat { (1 - cos(min(max(angle, 0), .pi))) / 2 * across }
+                return (height(roll - CGFloat(index + 1) * share), height(roll - CGFloat(index) * share))
+            }
+
+            /// A stripe at a point of the roll, held a point past its lower edge so no line of the window shows between two.
+            private static func place(_ stripe: CALayer, index: Int, roll: CGFloat, across: CGFloat, along: CGFloat) {
+                let edge = edges(index: index, roll: roll, across: across)
+                stripe.position = CGPoint(x: 0, y: edge.bottom)
+                stripe.bounds = CGRect(x: 0, y: 0, width: along, height: edge.top > edge.bottom ? edge.top - edge.bottom + 1 : 0)
             }
 
             /// A puff of smoke: white, soft all the way to its edge, tinted by the cell that uses it.
@@ -4549,19 +4571,27 @@
                 wisps.birthRate = 1
             }
 
-            /// The change went in: the smoke surges and the band whooshes up (a soft wash where motion is reduced), and
+            /// The change went in: the smoke surges and the stripes roll up (the stripes fading where motion is reduced), and
             /// the glow and the smoke go. Answers how long that takes, after which the layers can go.
             func reveal(still: Bool) -> TimeInterval {
                 layoutSubtreeIfNeeded()
                 let glowing = glowLayer.presentation()?.opacity ?? glowLayer.opacity
+                let across = stripes.bounds.height, along = stripes.bounds.width
+                let layers = stripes.sublayers ?? []
                 if still {
                     wisps.birthRate = 0
                     Self.animate(glowLayer, "opacity", from: glowing, to: 0, duration: 0.6)
                     Self.animate(wisps, "opacity", from: wisps.presentation()?.opacity ?? wisps.opacity, to: 0, duration: 0.6)
-                    Self.animate(wash, "opacity", from: 1, to: 0, duration: 0.7)
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    for (index, stripe) in layers.enumerated() {
+                        Self.place(stripe, index: index, roll: .pi, across: across, along: along)
+                    }
+                    CATransaction.commit()
+                    Self.animate(stripes, "opacity", from: 0.35, to: 0, duration: 0.7)
                     return 0.8
                 }
-                // The smoke gathers itself, more of it and rising faster, for a moment before the whoosh. Timed by
+                // The smoke gathers itself, more of it and rising faster, for a moment before the roll. Timed by
                 // animations, not by the main thread, which may be busy with the new code.
                 let gather = 0.3
                 wisps.opacity = 1
@@ -4574,14 +4604,36 @@
                 wisps.birthRate = 0
                 wisps.add(surge, forKey: "surge")
 
-                // Then the band goes up, quickening as it goes, and the smoke and the glow go with it.
-                let whoosh = 0.8
-                band.opacity = 1
-                Self.animate(band, "position.y", from: Float(band.position.y), to: Float(bounds.height + band.bounds.height / 2),
-                             duration: whoosh, delay: gather, timing: CAMediaTimingFunction(controlPoints: 0.55, 0, 0.3, 1))
+                // Then the stripes roll up at the drum's steady turn, which is what eases them in and out at the edges, and
+                // the smoke and the glow go with them. Each stripe's edges are worked out ahead along the roll, so Core
+                // Animation can run them without the app.
+                let roll = 1.1
+                let steps = 60
+                let times = (0...steps).map { NSNumber(value: Double($0) / Double(steps)) }
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                stripes.opacity = 1
+                for (index, stripe) in layers.enumerated() {
+                    let frames = (0...steps).map { Self.edges(index: index, roll: 2 * .pi * CGFloat($0) / CGFloat(steps), across: across) }
+                    Self.follow(stripe, "position.y", values: frames.map(\.bottom), times: times, duration: roll, delay: gather)
+                    Self.follow(stripe, "bounds.size.height", values: frames.map { $0.top > $0.bottom ? $0.top - $0.bottom + 1 : 0 },
+                                times: times, duration: roll, delay: gather)
+                    Self.place(stripe, index: index, roll: 2 * .pi, across: across, along: along)
+                }
+                CATransaction.commit()
                 Self.animate(wisps, "opacity", from: 1, to: 0, duration: 0.6, delay: gather + 0.1)
                 Self.animate(glowLayer, "opacity", from: glowing, to: 0, duration: 0.6, delay: gather)
-                return gather + whoosh + 0.2
+                return gather + roll + 0.2
+            }
+
+            private static func follow(_ layer: CALayer, _ key: String, values: [CGFloat], times: [NSNumber], duration: Double, delay: Double) {
+                let animation = CAKeyframeAnimation(keyPath: key)
+                animation.values = values
+                animation.keyTimes = times
+                animation.duration = duration
+                animation.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + delay
+                animation.fillMode = .backwards
+                layer.add(animation, forKey: key)
             }
 
             /// The glow and the smoke go without a change going in. Answers how long that takes.

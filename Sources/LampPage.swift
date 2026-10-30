@@ -150,6 +150,12 @@ enum LampControllers {
         return runtime
     }()
 
+    /// Serves this phone page from now on, under the session that's open (`LampPageLive`). Nil: the bundle's, by its own
+    /// version.
+    static func use(page: URL, version: String?) {
+        runtime.use(page: page, version: version ?? (try? ControllerSnapshot.read(page))?.version ?? "")
+    }
+
     static func answer(stop: Bool, _ done: @escaping @Sendable (Int, [String: Any]) -> Void) {
         // Both on the runtime's own queue, in the order the page asked: a stop then a start for the next round opens a
         // fresh session, never one the stop then closes.
@@ -1139,6 +1145,8 @@ final class LampPageBlockedHost: NSObject {
     private var epoch = "", gen = 0
     private var have: [String: String] = [:]
     private var served: Set<String> = []
+    /// The phone page Lamp last handed this copy, nil for the one in its bundle.
+    private var phone: (version: String, files: [String: String])?
     /// Under the app's own name: an app that isn't sandboxed shares the caches folder with every other.
     private static let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent(Bundle.main.bundleIdentifier ?? "LampPage").appendingPathComponent("LampPage")
@@ -1174,8 +1182,16 @@ final class LampPageBlockedHost: NSObject {
                 served = gone
                 files.take(changed: hashes.mapValues { Self.cache.appendingPathComponent($0) }, gone: gone)
             }
+            if let version = kept["phone"] as? String, let hashes = kept["phoneFiles"] as? [String: String],
+               FileManager.default.fileExists(atPath: Self.phoneFolder(version).path) {
+                phone = (version, hashes)
+                LampControllers.use(page: Self.phoneFolder(version), version: version)
+            }
         }
     }
+
+    /// Where a phone page Lamp handed over is kept, one folder to a version: written whole, then served.
+    private static func phoneFolder(_ version: String) -> URL { cache.appendingPathComponent("phone-" + version) }
 
     func start(_ view: WKWebView) {
         page = view
@@ -1187,7 +1203,7 @@ final class LampPageBlockedHost: NSObject {
         var pause: UInt64 = 2
         while page != nil {
             do {
-                let answer = try await call("/app/page/live", ["after": gen, "epoch": epoch, "place": Self.place, "bundle": Self.bundle], timeout: 60)
+                let answer = try await call("/app/page/live", ["after": gen, "epoch": epoch, "place": Self.place, "bundle": Self.bundle, "phone": true], timeout: 60)
                 pause = 2
                 if let e = answer["epoch"] as? String, e != epoch { epoch = e; gen = 0 }
                 if answer["send"] as? String == "saved" { await sendSaved(); continue }
@@ -1205,8 +1221,13 @@ final class LampPageBlockedHost: NSObject {
         let hashes = answer["files"] as? [String: String] ?? [:]
         let gone = Set(answer["gone"] as? [String] ?? [])
         let now = answer["now"] as? Bool ?? false
+        let newPhone = (answer["phone"] as? [String: Any]).flatMap { said -> (version: String, files: [String: String])? in
+            guard let version = said["version"] as? String, let files = said["files"] as? [String: String] else { return nil }
+            return (version, files)
+        }
+        let phoneChanged = newPhone?.version != phone?.version
         // What this copy already serves (Lamp asked again after its own restart): nothing for the page to do.
-        if hashes == have, gone == served, !now { gen = next; return }
+        if hashes == have, gone == served, !now, !phoneChanged { gen = next; return }
         try FileManager.default.createDirectory(at: Self.cache, withIntermediateDirectories: true)
         for (_, hash) in hashes where !FileManager.default.fileExists(atPath: Self.cache.appendingPathComponent(hash).path) {
             let file = try await call("/app/page/file", ["place": Self.place, "hash": hash], timeout: 60)
@@ -1216,17 +1237,21 @@ final class LampPageBlockedHost: NSObject {
             }
             try data.write(to: Self.cache.appendingPathComponent(hash), options: .atomic)
         }
+        if phoneChanged { try await takePhone(newPhone) }
         files.take(changed: hashes.mapValues { Self.cache.appendingPathComponent($0) }, gone: gone)
         // Files no copy names any more go.
         let kept = Set(hashes.values)
         for old in Set(have.values).subtracting(kept) { try? FileManager.default.removeItem(at: Self.cache.appendingPathComponent(old)) }
         have = hashes
         served = gone
-        if let data = try? JSONSerialization.data(withJSONObject: ["bundle": Self.bundle, "files": hashes, "gone": Array(gone)]) {
-            try? data.write(to: Self.manifest, options: .atomic)
-        }
+        var manifest: [String: Any] = ["bundle": Self.bundle, "files": hashes, "gone": Array(gone)]
+        if let phone { manifest["phone"] = phone.version; manifest["phoneFiles"] = phone.files }
+        if let data = try? JSONSerialization.data(withJSONObject: manifest) { try? data.write(to: Self.manifest, options: .atomic) }
         gen = next
-        let change: [String: Any] = ["gen": next, "changed": answer["changed"] as? [String] ?? [], "now": now, "pill": Self.place != "mac"]
+        let pageChanged = answer["changed"] as? [String] ?? []
+        // Only the phone page: the game's own page has nothing to do.
+        if pageChanged.isEmpty, !now { tell(next, "phone"); return }
+        let change: [String: Any] = ["gen": next, "changed": pageChanged, "now": now, "pill": Self.place != "mac"]
         guard let page, let json = try? JSONSerialization.data(withJSONObject: change) else { return }
         let taken = try? await page.evaluateJavaScript("window.__lampLive ? window.__lampLive(\(String(decoding: json, as: UTF8.self))) : false", in: nil, contentWorld: .page)
         // A page without Lamp's game runtime is opened again as it is.
@@ -1234,6 +1259,35 @@ final class LampPageBlockedHost: NSObject {
             page.reload()
             tell(next, "reloading")
         }
+    }
+
+    /// Serves the phone page Lamp handed over, whole: its files fetched and checked, written to a folder of its own and
+    /// only then swapped in, so a phone reads the old page or the new one and never a mix. Nil: back to the bundle's.
+    private func takePhone(_ new: (version: String, files: [String: String])?) async throws {
+        let bundled = Bundle.main.resourceURL?.appendingPathComponent("Phone") ?? URL(fileURLWithPath: "/nonexistent")
+        guard let new else {
+            LampControllers.use(page: bundled, version: nil)
+            if let old = phone { try? FileManager.default.removeItem(at: Self.phoneFolder(old.version)) }
+            phone = nil
+            return
+        }
+        let folder = Self.phoneFolder(new.version)
+        if !FileManager.default.fileExists(atPath: folder.path) {
+            let partial = Self.cache.appendingPathComponent("partial-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: partial) }
+            for (path, hash) in new.files {
+                let file = try await call("/app/page/file", ["place": Self.place, "hash": hash], timeout: 60)
+                guard let text = file["data"] as? String, let data = Data(base64Encoded: text), Self.name(of: data) == hash,
+                      !path.split(separator: "/").contains(where: { $0 == ".." || $0.hasPrefix(".") }) else { throw URLError(.cannotDecodeContentData) }
+                let target = partial.appendingPathComponent(path)
+                try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: target)
+            }
+            try FileManager.default.moveItem(at: partial, to: folder)
+        }
+        LampControllers.use(page: folder, version: new.version)
+        if let old = phone, old.version != new.version { try? FileManager.default.removeItem(at: Self.phoneFolder(old.version)) }
+        phone = new
     }
 
     /// What the page has saved (its localStorage, where LampStore keeps it), for Lamp's preview of the app to start from:

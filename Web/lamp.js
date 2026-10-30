@@ -9,6 +9,9 @@
   // Lamp for once, just after Lamp has put it on the device, and keeps.
   var installed = /*LAMP_INSTALL*/null;
   var prefix = 'lamp:';
+  // Taken as the page loads: the wait before asking Lamp again is the page's, and a game's runtime takes away only
+  // the timers the game's own code left running (`Lamp.controllers` renews its session through this).
+  var browserTimeout = window.setTimeout;
 
   function read(key, fallback) {
     try { var v = window.localStorage.getItem(prefix + key); return v === null ? fallback : JSON.parse(v); }
@@ -189,7 +192,7 @@
       if (i >= list.length) {
         // What the person said is paid for once it's heard: each way to the Mac once, never all of them again. Lamp
         // knows a recording by its id, so one that reaches it twice this way is still transcribed and charged once.
-        if (round === 0 && left() > 4000 && path !== '/ai/hear') return new Promise(function (r) { setTimeout(r, 3000); }).then(function () { return attempt(0, 1); });
+        if (round === 0 && left() > 4000 && path !== '/ai/hear') return new Promise(function (r) { browserTimeout(r, 3000); }).then(function () { return attempt(0, 1); });
         return Promise.reject(new Failure('Couldn\'t reach Lamp on your Mac. Keep this device on the same Wi-Fi as the Mac, with Lamp open, and try again.'));
       }
       return exchange(list[i], path, token, text, Math.min(timeout, left())).then(function (answer) {
@@ -3472,8 +3475,16 @@ window.Lamp = window.Lamp || {};
  * A phone that leaves, or whose link drops, has every button it held let go (onButton with down false) before
  * onLeave, and its files end. Movement that arrives late is dropped rather than acted on. A message over
  * messageLimit isn't sent, from the TV or from a phone, and the console here says so.
+ *
+ * A game's code run again in place keeps the session: the phones stay joined with their numbers, and the new
+ * run needs no stop() or start() of its own. Where lamp-game.js does that, what the old run asked to hear ends
+ * with it, and before its first frame the new run's onLeave and onJoin hear who left and who is here (a join
+ * it has seen in its snapshot included). Presses and messages from in between aren't replayed; isHeld says
+ * what's held now.
  */
-(function () {
+// The session is the page's: its timers are taken from the browser here, as the page loads, so a game's runtime
+// that takes away the timers its code left running (lamp-game.js) never takes these.
+(function (setTimeout, clearTimeout, setInterval, clearInterval) {
   'use strict';
   var LATE = 300;          // ms after which a stick or tilt reading is dropped as stale
   var MESSAGE = 16384;     // bytes of JSON in one message, the most the relay passes on (ControllerWire.message)
@@ -3691,6 +3702,8 @@ function lampLinks(pipe) {
 
     return {
       send: send,
+      // Whether a file is on its way, either way.
+      busy: function () { for (var k in outgoing) return true; for (k in incoming) return true; return false; },
       // A file message: true when it was one.
       text: function (route, m) {
         var k = key(route, m.id);
@@ -3893,6 +3906,9 @@ function lampLinks(pipe) {
     var mine = run;
     askTimer = setTimeout(function () {
       if (!started || mine !== run) return;
+      // Lamp's hidden preview of a game has no host for phones and asks for none: its one phone, when it has
+      // one, comes by `_attach`, and the join card is drawn from an address of a real one's length.
+      if (window.lampPreview) { link = 'http://192.168.0.2:47860/#' + new Array(151).join('0'); emit('link', [link]); return; }
       if (host === 'game' && lgService) return askService();
       if (host === 'game' && pipe) return askPipe(mine);
       // The host asked for goes with the question, so whoever answers says when it isn't that host rather than
@@ -4006,7 +4022,7 @@ function lampLinks(pipe) {
       // The session the chosen host runs, and only it, ends.
       if (lgBridge) { try { lgBridge.cancel(); } catch (e) {} lgBridge = null; }
       else if (started && host === 'game' && pipe) pipeCall('stop', null);
-      else if (started && window.LampAI && LampAI._post) LampAI._post('/app/controller', host ? { stop: true, host: host } : { stop: true }, 20000).then(function () {}, function () {});
+      else if (started && !window.lampPreview && window.LampAI && LampAI._post) LampAI._post('/app/controller', host ? { stop: true, host: host } : { stop: true }, 20000).then(function () {}, function () {});
       started = false;
       host = null;
       run++;
@@ -4052,7 +4068,7 @@ function lampLinks(pipe) {
     _attach: function (source) { others.push(source); if (started) source.start(hooks()); }
   };
   if (window.Lamp) window.Lamp.controllers = api;
-})();
+})(window.setTimeout, window.clearTimeout, window.setInterval, window.clearInterval);
 /* The wish's other apps. Written by Lamp before every build; don't edit.
  *
  * The other apps of this app's wish (an iPhone app, a Mac app, an Android app, a TV app, a game, a screen): which
@@ -4611,6 +4627,8 @@ function lampLinks(pipe) {
 
     return {
       send: send,
+      // Whether a file is on its way, either way.
+      busy: function () { for (var k in outgoing) return true; for (k in incoming) return true; return false; },
       // A file message: true when it was one.
       text: function (route, m) {
         var k = key(route, m.id);

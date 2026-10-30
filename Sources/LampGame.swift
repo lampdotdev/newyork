@@ -63,7 +63,8 @@ struct LampGameSurface: NSViewRepresentable {
 
 /// Holds the page and takes the keys it hands back. WebKit gives back every key the page doesn't cancel, and a game
 /// reads its keys without cancelling most of them, so each would reach the window, which beeps for a key nothing took.
-/// Shortcuts with ⌘ are the menus' and never come here.
+/// A shortcut with ⌘ goes to the menus first: the web view says it took every one, before the page has even seen it,
+/// so macOS looks no further and ⌘Q, ⌘W and ⌘H would do nothing while the game has the keyboard.
 final class LampKeyCatcher: NSView {
     let page: WKWebView
 
@@ -76,6 +77,11 @@ final class LampKeyCatcher: NSView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command), NSApp.mainMenu?.performKeyEquivalent(with: event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
 
     override func keyDown(with event: NSEvent) {}
     override func keyUp(with event: NSEvent) {}
