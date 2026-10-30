@@ -27,6 +27,7 @@ import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './veh
 import { bryantParkLawn } from './landmarks.js';
 import { groundHeight, groundTilt } from './terrain.js';
 import { polygonContact } from './building-collision.js';
+import { hot } from '../lamp-game.js';
 
 // Player models, animation and movement for walking, driving, cycling and flying.
 
@@ -1297,5 +1298,17 @@ class ThirdPersonControllerManager {
     h.tiltPivot.position.y = Math.sin(elapsed * 2.6) * 0.18;
   }
 }
+
+// Lamp: a change to how the player moves (the update methods, CAR_DRIVE and the other tuning above) goes into the
+// running city with the player where they are (lamp-game.js, "Changes while it's played"); one to what the constructor
+// built once (the person's, the car's, the bike's and the helicopter's bodies, the taxi's door decal and plate, the keys)
+// opens the page again. The taxi's textures are drawn by functions of this file's own, so their source is kept from one
+// version to the next to tell.
+const live = hot(import.meta);
+const texturesNow = [createTaxiDoorDecalTexture, createNYLicensePlateTexture].map(String).join('\n');
+const texturesBefore = live.data.taxiTextures ?? texturesNow;
+live.data.taxiTextures = texturesNow;
+live.accept((next, { changed }) => texturesNow === texturesBefore
+  && !changed.some((name) => /\.(create\w*Entity|bindKeyboard)$/.test(name)));
 
 export { ThirdPersonControllerManager };

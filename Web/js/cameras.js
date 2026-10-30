@@ -1,6 +1,12 @@
 import * as THREE from 'three/webgpu';
 import { bryantParkLawn } from './landmarks.js';
 import { groundHeight } from './terrain.js';
+import { hot } from '../lamp-game.js';
+
+// Lamp: the camera systems made, kept through a change of this file (lamp-game.js, "Changes while it's played"), so a
+// changed preset is put on the camera in use at once (the end of this file).
+const live = hot(import.meta);
+const systems = (live.data.systems ??= new Set());
 
 // Lamp: scenic views placed at street level, which stand on the ground where they are
 const STREET_VIEWS = new Set(['centralPark', 'fifthAve', 'timesSquare', 'chryslerGCT', 'observatory']);
@@ -23,6 +29,7 @@ const CAMERA_PRESETS = [
 
 class CameraSystem {
   constructor(domElement, controllerManager) {
+    systems.add(this);
     this.domElement = domElement;
     this.controllerManager = controllerManager;
 
@@ -372,5 +379,13 @@ class CameraSystem {
     this.camera.lookAt(this.currentLookAt);
   }
 }
+
+// Lamp: a change to how the cameras follow and frame the player, or to CAMERA_PRESETS, goes into the running city; one
+// to the drag and wheel handling the constructor set up opens the page again.
+live.accept((next, { changed }) => {
+  if (changed.some((name) => /\.bindPointerControls$/.test(name))) return false;
+  // The field of view is copied from the preset as it's chosen: the one in use takes the new preset now.
+  for (const system of systems) system.setCameraPreset(system.activePresetId);
+});
 
 export { CAMERA_PRESETS, CameraSystem };
