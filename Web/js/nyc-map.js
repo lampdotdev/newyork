@@ -30,6 +30,11 @@ import {
 import { groundHeight } from './terrain.js';
 import { hot } from '../lamp-game.js';
 
+// Lamp: the map systems made, kept through a change of this file (lamp-game.js, "Changes while it's played"), so a
+// change to how the map is drawn shows at once rather than after the player moves (the end of this file).
+const live = hot(import.meta);
+const systems = (live.data.systems ??= new Set());
+
 // Minimap and full-screen map drawn from the same geography and building footprints as the 3D city.
 // World frame: 1 unit = 1 m, x = Manhattan-grid east, z = grid south. Both maps face grid north,
 // about 29 degrees east of true north.
@@ -429,6 +434,7 @@ const overlaps = (boxes, b) => boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b
 
 class NYCMapSystem {
   constructor({ controllerManager, cameraSystem, trafficSystem, allBlocks = [], onTeleport, onToggle }) {
+    systems.add(this);
     this.controllerManager = controllerManager;
     this.cameraSystem = cameraSystem;
     this.trafficSystem = trafficSystem;
@@ -1281,6 +1287,14 @@ class NYCMapSystem {
 
 // Lamp: a change to how the minimap and the full map are drawn goes into the running city; one to the buttons, keys
 // and dragging the constructor set up opens the page again.
-hot(import.meta).accept((next, { changed }) => !changed.some((name) => /\.initEvents$/.test(name)));
+live.accept((next, { changed }) => {
+  if (changed.some((name) => /\.initEvents$/.test(name))) return false;
+  // What's drawn is kept between frames until the player moves: drawn again with the new code.
+  for (const system of systems) {
+    system.miniCache = null;
+    system.fullStaticKey = '';
+    if (system.isFullMapOpen) system.renderFullMap();
+  }
+});
 
 export { NYCMapSystem };
