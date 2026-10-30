@@ -5343,9 +5343,13 @@
             }
             try? await Task.sleep(for: .seconds(LampShowcase.script["lead"] as? Double ?? 0.8))
             let steps = LampShowcase.script["steps"] as? [[String: Any]] ?? []
-            // A key held down (a game's controls) belongs to a batch, which lets it go.
-            _ = Handover.begin(id: "showcase", count: steps.count) { _ in }
-            for step in steps { await playShowcase(step) }
+            // A key held down (a game's controls) belongs to a batch, which lets it go. The person's click or Esc stops
+            // the batch, and the take with it: nothing more is played on an app they took back.
+            let batch = Handover.begin(id: "showcase", count: steps.count) { _ in }
+            for step in steps {
+                guard batch.carriesOn else { LampShowcase.note("missing", "the rest of the steps: the app was taken back"); break }
+                await playShowcase(step)
+            }
             LampShowcase.note("end")
         }
 
@@ -5377,11 +5381,19 @@
                 LampShowcase.note("act", showcaseText(frame), action.action, target)
                 // The reel's cursor gets there before anything happens.
                 try? await Task.sleep(for: .seconds(0.3))
+            } else if let x = action.x, let y = action.y, let window = LampRuntime.windowsOnScreen.first, let frame = window.contentView?.superview {
+                // A spot given in the picture's pixels (what isn't listed): the reel's cursor goes there too.
+                let scale = LampRuntime.scale(of: window)
+                LampShowcase.note("act", showcaseText(CGRect(x: x / (frame.bounds.width * scale), y: y / (frame.bounds.height * scale), width: 0, height: 0)), action.action, "a spot")
+                try? await Task.sleep(for: .seconds(0.3))
             }
             // Taken from a run-loop timer (`after`), as `perform` takes its steps: an action that opens a dialog doesn't
             // return until it closes, and the steps after it are how it gets answered. Those resume on the main queue,
             // which keeps running while the dialog is open only because the action isn't itself on that queue.
-            after(0) { LampShowcase.note("did", run(action)) }
+            after(0) {
+                guard Handover.current?.carriesOn == true else { return }
+                LampShowcase.note("did", run(action))
+            }
             try? await Task.sleep(for: .milliseconds(150))
         }
 

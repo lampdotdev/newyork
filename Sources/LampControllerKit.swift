@@ -426,8 +426,8 @@ import Foundation
 ///
 /// One rule for every host of a shared page, each reading this type rather than a copy of it: the app around it on the
 /// Mac, the iPhone and the iPad (LampPage.swift, as Content-Security-Policy headers and its navigation) and Lamp's
-/// previews (`StagedFiles`) do; a host elsewhere (a TV, an Xbox, Android, a phone's controller page) holds a shared page
-/// only once it reads it too. It's in LampRelayKit because that's the Swift Lamp and every page's app compile alike
+/// previews (`StagedFiles`) do, and a phone's controller page is held to its `origins` (`PhonePageReach`); a host
+/// elsewhere (a TV, an Xbox, Android) holds a shared page only once it reads it too. It's in LampRelayKit because that's the Swift Lamp and every page's app compile alike
 /// (the controller kit).
 public struct NetworkPolicy: Codable, Equatable, Sendable {
     /// Exact origins, as `origin(_:)` writes them: "https://api.open-meteo.com", "wss://relay.example:8443".
@@ -578,6 +578,106 @@ extension NetworkPolicy {
 #endif
 
 import Foundation
+
+/// The rules a phone's browser holds a shared app's phone page to (its Content-Security-Policy), sent with every answer by
+/// each server of one: Lamp's (`Store.phonePage`), a game's own (`PhonePageServer`), an LG TV's (relay.js) and the Xbox
+/// host's (lamp_controllers.h), which write the same words. An app the person made has none (`Reach.unrestricted`), and its
+/// page is served as it always was. For a shared one nothing is allowed unless it's named: the page's own files; the
+/// game's relay, on the machine the page came from (by the name the phone used) at the port it listens on as the page is
+/// served, and nowhere else on the network; and the sites the app may reach (`Reach`). A relay that moved after the page
+/// loaded is outside the page's rules, so lamp-controller.js loads the page again when its socket is refused.
+public enum PhonePagePolicy {
+    /// Sites beyond the page's own files and its relay.
+    public enum Reach: Equatable, Sendable {
+        /// No rules at all: an app the person made here (or a starter), or one they let reach every site.
+        case unrestricted
+        /// Only these: an app shared with the person, held to the sites its safety review named. Each is a host name
+        /// ("api.example.com") or an origin ("https://api.example.com:8443"); anything else is dropped.
+        case only([String])
+    }
+
+    /// Where a game's bundle, an LG TV's service and an Xbox package keep a held page's sites beside its files, written by
+    /// Lamp in place of any file of the app's by that name (`file(for:)`). Its being there is what holds the page: an app the
+    /// person made gets none, as no page from before these rules has one, and is served as it always was; one that's there
+    /// but can't be read as a list of sites holds the page to none.
+    public static let reachFile = "lamp-reach.json"
+
+    /// The reach file for a page, nil for an unrestricted one, which has none.
+    public static func file(for reach: Reach) -> Data? {
+        guard case .only(let sites) = reach else { return nil }
+        return try? JSONSerialization.data(withJSONObject: ["only": sites], options: [.sortedKeys])
+    }
+
+    /// A reach file's `Reach`: unrestricted when there's none (nil), no sites when it can't be read as a list of them.
+    public static func reach(json data: Data?) -> Reach {
+        guard let data else { return .unrestricted }
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let sites = object["only"] as? [Any] else {
+            return .only([])
+        }
+        return .only(sites.compactMap { $0 as? String })
+    }
+
+    /// The `Reach` of the page whose reach file would be at `url`: a file that's there but can't be read holds it to none.
+    public static func reach(fileAt url: URL) -> Reach {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .unrestricted }
+        return reach(json: (try? Data(contentsOf: url)) ?? Data())
+    }
+
+    /// The header's value for a page asked for by `host` (the request's Host header), with the relay at `relayPort`; nil
+    /// for an unrestricted page, which is sent with no header.
+    public static func header(host: String?, relayPort: UInt16?, reach: Reach) -> String? {
+        guard case .only(let named) = reach else { return nil }
+        let sites = named.compactMap(source)
+        var connect = ["'self'"]
+        if let name = relayHost(host), let relayPort { connect.append("ws://\(name):\(relayPort)") }
+        func list(_ base: [String]) -> String { (base + sites).joined(separator: " ") }
+        return [
+            "default-src 'none'",
+            "script-src " + list(["'self'", "'unsafe-inline'"]),
+            "style-src " + list(["'self'", "'unsafe-inline'"]),
+            "img-src " + list(["'self'", "data:", "blob:"]),
+            "media-src " + list(["'self'", "data:", "blob:"]),
+            "font-src " + list(["'self'", "data:"]),
+            "connect-src " + list(connect),
+            "worker-src 'self' blob:",
+            "manifest-src 'self'",
+            "base-uri 'none'",
+            "form-action 'none'",
+        ].joined(separator: "; ")
+    }
+
+    /// The name in a Host header, without its port, when it's one a policy can name: a host name or an IPv4 address. An
+    /// IPv6 address can't be written in a policy, so a page reached by one has no relay.
+    static func relayHost(_ header: String?) -> String? {
+        guard var host = header?.trimmingCharacters(in: .whitespaces).lowercased(), !host.isEmpty, !host.hasPrefix("[") else { return nil }
+        if let colon = host.firstIndex(of: ":") { host = String(host[..<colon]) }
+        return plainHost(host) ? host : nil
+    }
+
+    /// One named site as a policy source: a host name, or an http(s) or ws(s) origin with at most a port.
+    static func source(_ text: String) -> String? {
+        let site = text.trimmingCharacters(in: .whitespaces).lowercased()
+        guard let split = site.range(of: "://") else { return plainHost(site) ? site : nil }
+        let scheme = site[..<split.lowerBound]
+        guard ["http", "https", "ws", "wss"].contains(scheme) else { return nil }
+        var rest = String(site[split.upperBound...])
+        if rest.hasSuffix("/") { rest.removeLast() }
+        var host = rest
+        if let colon = rest.firstIndex(of: ":") {
+            let port = rest[rest.index(after: colon)...]
+            guard !port.isEmpty, port.count <= 5, port.allSatisfy(\.isASCII), port.allSatisfy(\.isNumber) else { return nil }
+            host = String(rest[..<colon])
+        }
+        return plainHost(host) ? "\(scheme)://\(rest)" : nil
+    }
+
+    private static func plainHost(_ host: String) -> Bool {
+        guard !host.isEmpty, host.count <= 253, !host.hasPrefix("."), !host.hasSuffix("."), !host.contains("..") else { return false }
+        return host.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" || $0 == "." }
+    }
+}
+
+import Foundation
 import Network
 
 /// One game's phone page, served by the game itself (`ControllerRuntime`) on a port of its own, as Lamp serves a TV
@@ -688,6 +788,8 @@ public final class PhonePageServer: @unchecked Sendable {
         public var body = Data()
         public var location: String?
         public var head = false
+        /// What the phone's browser holds the page to (`PhonePagePolicy`), sent with every answer.
+        public var policy: String?
     }
 
     /// The answer to a request's head (its request line and headers).
@@ -711,14 +813,25 @@ public final class PhonePageServer: @unchecked Sendable {
     /// name lead here (DNS rebinding) reads nothing.
     public func answer(path full: String, host: String?) -> Page {
         guard Self.names(host, among: hosts()) else { return Page(status: 403, body: Data("Not for this host.".utf8)) }
+        let reach = PhonePagePolicy.reach(fileAt: root.appendingPathComponent(PhonePagePolicy.reachFile))
+        var page = file(path: full, held: reach != .unrestricted)
+        page.policy = PhonePagePolicy.header(host: host, relayPort: relayPort(), reach: reach)
+        return page
+    }
+
+    /// `held`: the page has rules, which lamp-relay.json says (`policy`), so lamp-controller.js only ever takes a refused
+    /// socket for a moved relay on a page Lamp gave rules to.
+    private func file(path full: String, held: Bool) -> Page {
         let missing = Page(status: 404, body: Data("Nothing here. Open the game first.".utf8))
         let path = full.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
         guard path.hasPrefix("/") else { return missing }
         var names = path.dropFirst().split(separator: "/", omittingEmptySubsequences: false).map { $0.removingPercentEncoding ?? "\0" }
         if names.last == "" { names[names.count - 1] = "index.html" }
         if names == ["lamp-relay.json"] {
-            guard let port = relayPort(),
-                  let body = try? JSONSerialization.data(withJSONObject: ["port": Int(port), "app": app]) else {
+            let port = relayPort()
+            var said: [String: Any] = ["port": Int(port ?? 0), "app": app]
+            if held { said["policy"] = true }
+            guard port != nil, let body = try? JSONSerialization.data(withJSONObject: said) else {
                 return Page(status: 503, body: Data("The link for controllers isn't open.".utf8))
             }
             return Page(status: 200, type: Self.type(for: "json"), body: body)
@@ -754,7 +867,8 @@ public final class PhonePageServer: @unchecked Sendable {
     private static func respond(_ connection: NWConnection, _ page: Page) {
         let reason = HTTPURLResponse.localizedString(forStatusCode: page.status).capitalized
         let location = page.location.map { "Location: \($0)\r\n" } ?? ""
-        var response = Data(("HTTP/1.1 \(page.status) \(reason)\r\nContent-Type: \(page.type)\r\nContent-Length: \(page.body.count)\r\n\(location)"
+        let policy = page.policy.map { "Content-Security-Policy: \($0)\r\n" } ?? ""
+        var response = Data(("HTTP/1.1 \(page.status) \(reason)\r\nContent-Type: \(page.type)\r\nContent-Length: \(page.body.count)\r\n\(location)\(policy)"
             + "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n").utf8)
         if !page.head { response.append(page.body) }
         connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
