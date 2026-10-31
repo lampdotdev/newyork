@@ -28,10 +28,18 @@ import { CityAudioSystem } from './audio-system.js';
 // Lamp: a change that can't be swapped into the running city runs this file's code again in place (lamp-game.js,
 // "Running the game's code again"). What's slow to make is kept through that with live.keep: the renderer and its
 // compiled shaders, the ground's heights (terrain.js) and each part of the city, which is built again only when its own
-// code, or a part it's built from (its `inputs`), changed. The scene, the camera and the lights are kept too: three.js
+// code, the map data it's built from (its `from`: CITY_MAP and the rest below) or a part it's built from (its
+// `inputs`) changed, the rest of the city kept as it is. The scene, the camera and the lights are kept too: three.js
 // works out how to draw every object anew for a new one of them, which held the game still for a second at each change.
 // Everything else here (the HUD, the controllers, the sound) is made again from the page as it is now.
 const live = hot(import.meta);
+
+// The generated data each part of the city is built from (its keep's `from`): a change to one, a street's lanes added to
+// the map or new tree points, builds those parts again in place.
+const CITY_MAP = 'js/nyc-geodata.js';
+const BUILDING_DATA = ['js/building-geodata.js', 'js/building-geodata.bin.gz'];
+const TREE_DATA = ['js/tree-geodata.js', 'js/tree-geodata.bin.gz', 'js/tree-placements.js'];
+const SUBWAY_DATA = 'js/subway-geodata.js';
 
 async function initApp() {
   const container = document.getElementById('canvas-container');
@@ -150,21 +158,21 @@ async function initApp() {
     // Lamp: the street level built flat at y = 0, set on the ground
     setOnTerrain(g.getObjectByName('ManhattanCityGrid'));
     return made;
-  }, { cull: setupSceneCulling }), { inputs: [heights] });
+  }, { cull: setupSceneCulling }), { inputs: [heights], from: [CITY_MAP] });
   const cityGrid = grid.made;
   markInit('cityGrid');
   await showLoadingStage('Building bridges and surrounding boroughs...');
   const boroughPart = live.keep('boroughs', () => cityPart((g) => buildBoroughs(g, { sidewalks: grid.made.sidewalks }), { cull: setupSceneCulling }),
-    { inputs: [heights, grid] });
+    { inputs: [heights, grid], from: [CITY_MAP] });
   const boroughs = boroughPart.made;
   markInit('boroughs');
   await showLoadingStage('Building landmarks...');
-  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling }), { inputs: [heights] });
+  const landmarks = live.keep('landmarks', () => cityPart((g) => buildLandmarks(g), { cull: setupSceneCulling }), { inputs: [heights], from: [CITY_MAP] });
   const landmarkColliders = landmarks.made.colliders;
   markInit('landmarks');
   await showLoadingStage('Generating building footprints and facades...');
   const blocks = live.keep('blocks', () => cityPart((g) => buildCityBlocks(g, landmarks.made.colliders), { cull: setupSceneCulling }),
-    { inputs: [heights, landmarks] });
+    { inputs: [heights, landmarks], from: [CITY_MAP, ...BUILDING_DATA] });
   const cityBlocks = blocks.made;
   markInit('blocks');
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...boroughs.colliders, ...(cityGrid.colliders || [])];
@@ -176,7 +184,7 @@ async function initApp() {
     const made = buildStreetDetails(g, allColliders);
     setOnTerrain(g.getObjectByName('ManhattanStreetDetails'));
     return made;
-  }, { cull: setupSceneCulling }), { inputs: [heights, grid, boroughPart, landmarks, blocks] });
+  }, { cull: setupSceneCulling }), { inputs: [heights, grid, boroughPart, landmarks, blocks], from: [...TREE_DATA, SUBWAY_DATA] });
   const streetDetails = details.made;
   markInit('streetDetails');
   await showLoadingStage('Creating traffic and pedestrian routes...');
@@ -189,17 +197,17 @@ async function initApp() {
     ...details.made.footprints,
     ...allColliders.filter((c) => !c.obb
       && (c.minY ?? 0) - groundHeight((c.minX + c.maxX) * 0.5, (c.minZ + c.maxZ) * 0.5) < 3.5)
-  ], details.made.signalIntersections)), { inputs: [heights, grid, boroughPart, landmarks, blocks, details] });
+  ], details.made.signalIntersections)), { inputs: [heights, grid, boroughPart, landmarks, blocks, details], from: [CITY_MAP] });
   const trafficSystem = traffic.made;
   markInit('traffic');
-  const highway = live.keep('highwayTraffic', () => cityPart((g) => createHighwayTraffic(g, grid.made.highwayLanes)), { inputs: [grid] });
+  const highway = live.keep('highwayTraffic', () => cityPart((g) => createHighwayTraffic(g, grid.made.highwayLanes)), { inputs: [grid], from: [CITY_MAP] });
   const highwayTraffic = highway.made;
   await showLoadingStage('Adding road markings...');
   const roadPaint = live.keep('roadPaint', () => cityPart((g) => {
     const made = buildRoadPaint(g, traffic.made.network);
     setOnTerrain(made, 0); // vertex by vertex: its strips come cut to length (road-paint.js)
     return made;
-  }), { inputs: [heights, traffic] });
+  }), { inputs: [heights, traffic], from: [CITY_MAP, 'js/road-network.js'] });
   markInit('roadPaint');
   const parts = [grid, boroughPart, landmarks, blocks, details, traffic, highway, roadPaint];
   for (const part of parts) {

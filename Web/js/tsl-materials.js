@@ -52,6 +52,7 @@ import {
   texture,
   rotateUV,
   mrt,
+  output,
   If,
   sqrt,
   specularColor,
@@ -3025,7 +3026,9 @@ function getSmokeCloudTexture() {
  *   sunlit top rims and cool urban-canyon self-shadowing.
  */
 // Transparent decal/effect planes & sprites preserve the underlying road/scene G-buffer in MRT (zero RGB & zero alpha on normal & metalRough)
+// (Lamp: with its own color as `output` too, or a scene pass without MRT, as at lower quality, would draw nothing of it)
 const _transparentEffectMRT = mrt({
+  output: output,
   normal: vec4(0.0, 0.0, 0.0, 0.0),
   metalRough: vec4(0.0, 0.0, 0.0, 0.0)
 });

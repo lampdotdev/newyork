@@ -130,8 +130,10 @@ time presets (`lighting.js`), the map's drawing (`nyc-map.js`) and the controlle
 in a module ending with `hot(import.meta).accept()` from lamp-game.js ("Changes while it's played" there). Anything
 else (`main.js`, `index.html`, what those constructors built once, a new module) runs the game's code again in place,
 back where the player was, in a couple of seconds: `main.js` keeps the renderer and each part of the city
-(`live.keep`), and builds a part again only when its own code, or a part it's built from (its `inputs`), changed, so
-a change to the trees builds the street details, traffic and road paint again and the rest stays. A new part of the
-city goes the same way: built by its own module into the group `cityPart` gives it, set on the ground inside that
-build, and kept in `main.js` with the parts it's built from as its inputs. Something new that changes as it's played
+(`live.keep`), and builds a part again only when its own code, the generated data it's built from (its `from`:
+`CITY_MAP`, `BUILDING_DATA`, `TREE_DATA`, `SUBWAY_DATA`) or a part it's built from (its `inputs`) changed, so a change
+to the trees builds the street details, traffic and road paint again and the rest stays, and a change to the map data,
+which nearly every part reads, builds the city again in place with the player where they are. A new part of the city goes the same way: built by its own
+module into the group `cityPart` gives it, set on the ground inside that build, and kept in `main.js` with the data
+it's built from as its `from` and the parts it's built from as its inputs. Something new that changes as it's played
 (a mission, a race) goes in a module of its own, a class `main.js` makes one of.

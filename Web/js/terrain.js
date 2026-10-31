@@ -17,7 +17,7 @@ let grid = null; // { x0, z0, step, cols, rows, heights: Float32Array }
 // Lamp: kept while main.js runs again for a change (lamp-game.js, "Running the game's code again"), so the heights are
 // read once; the parts of the city built on them name what this returns as one of their inputs.
 async function loadTerrain(url = './data/elevation.bin.gz') {
-  grid = await hot(import.meta).keep('heights', () => readHeights(url));
+  grid = await hot(import.meta).keep('heights', () => readHeights(url), { from: [url.replace(/^\.\//, '')] });
   return grid;
 }
 
