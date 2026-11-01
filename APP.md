@@ -135,3 +135,8 @@ a change to the trees builds the street details, traffic and road paint again an
 city goes the same way: built by its own module into the group `cityPart` gives it, set on the ground inside that
 build, and kept in `main.js` with the parts it's built from as its inputs. Something new that changes as it's played
 (a mission, a race) goes in a module of its own, a class `main.js` makes one of.
+
+The page keeps every version of a module for as long as it's open, with whatever its variables point at, so what a
+module holds at its top level is released when the code runs again: `hot(import.meta).dispose` for what the module
+itself gathered, `release()` from the run or part that owns a system. Big tables that never change as it's played
+(the buildings, the trees) are built inside `keep`, with what they're read from in `from`, so a run reuses them.

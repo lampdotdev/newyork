@@ -34,6 +34,8 @@ import { hot } from '../lamp-game.js';
 // change to how the map is drawn shows at once rather than after the player moves (the end of this file).
 const live = hot(import.meta);
 const systems = (live.data.systems ??= new Set());
+// Lamp: the layers this version drew from the city it was given; the next version makes its own.
+live.dispose(() => { LAYERS = null; FOOTPRINTS = null; });
 
 // Minimap and full-screen map drawn from the same geography and building footprints as the 3D city.
 // World frame: 1 unit = 1 m, x = Manhattan-grid east, z = grid south. Both maps face grid north,
@@ -433,6 +435,9 @@ function drawWaypoint(ctx, x, y, r) {
 const overlaps = (boxes, b) => boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
 
 class NYCMapSystem {
+  // Lamp: the game's code ran again and this map goes with that run (main.js).
+  release() { systems.delete(this); }
+
   constructor({ controllerManager, cameraSystem, trafficSystem, allBlocks = [], onTeleport, onToggle }) {
     systems.add(this);
     this.controllerManager = controllerManager;

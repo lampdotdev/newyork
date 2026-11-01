@@ -2,7 +2,14 @@
 // NYC OTI Building Footprints: https://data.cityofnewyork.us/resource/5zhs-2jue.json
 // Snapshot SHA-256: 796136eb448bce005604b88062ab95c21a4cefeb34b53eba2ad47e3ab41b5853
 // 37,353 buildings. Coordinates: 0.5 m; roof heights: 1 m; construction years: decades (0 unknown).
-const response = await fetch(new URL('./building-geodata.bin.gz', import.meta.url));
+import { hot } from '../lamp-game.js';
+
+// Lamp: decoded once and kept while the game's code runs again (lamp-game.js, "Running the game's code again"): every
+// run would otherwise make all these objects over, and the page keeps the module that made them for as long as it's
+// open. Nothing changes them as the game runs. The address is outside the build, whose text must stay the same.
+const address = new URL('./building-geodata.bin.gz', import.meta.url);
+export const REAL_BUILDINGS = await hot(import.meta).keep('realBuildings', async () => {
+const response = await fetch(address);
 if (!response.ok) throw new Error(`Building data request failed: ${response.status}`);
 // Servers that send .gz files as Content-Encoding: gzip hand over bytes the browser has already inflated
 const body = new Uint8Array(await response.arrayBuffer());
@@ -39,7 +46,7 @@ const count = uint();
 if (count > (xStart - 12) / 5) throw invalidData();
 let x = 0, z = 0;
 
-export const REAL_BUILDINGS = Array.from({ length: count }, () => {
+const buildings = Array.from({ length: count }, () => {
   const height = uint(), decade = uint(), polygons = [];
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (let n = uint(); n > 0; n--) {
@@ -61,3 +68,5 @@ export const REAL_BUILDINGS = Array.from({ length: count }, () => {
     minX, maxX, minZ, maxZ, cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2 };
 });
 if (!metadata.done() || !xs.done() || !zs.done()) throw invalidData();
+return buildings;
+}, { from: ['js/building-geodata.bin.gz'] });
