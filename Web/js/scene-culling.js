@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { hot } from '../lamp-game.js';
 
 // Spatial culling for the island-wide static geometry. Most of Manhattan's street furniture and building massing is
 // built as a handful of instanced meshes spanning the whole island (bounding spheres ~7 km across), which three.js can
@@ -321,6 +322,9 @@ function setupSceneCulling(scene, roots, shadow = null) {
 }
 
 const state = { culled: [] };
+// Lamp: this list is this version's: the page keeps a module it replaced for as long as it's open, and with it
+// whatever the module's variables still point at. A kept part's chunks are handed to the next version (`cullAlso`).
+hot(import.meta).dispose(() => { state.culled.length = 0; });
 
 // The sun shadow's cascade cameras, which render the stand-ins.
 function shadowCameras(shadow) {

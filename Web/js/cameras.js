@@ -37,6 +37,9 @@ class CameraSystem {
     );
   }
 
+  // Lamp: the game's code ran again and this system goes with that run; the camera it drove is kept (main.js).
+  release() { systems.delete(this); }
+
   constructor(domElement, controllerManager, camera = CameraSystem.makeCamera()) {
     systems.add(this);
     this.domElement = domElement;

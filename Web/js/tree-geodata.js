@@ -2,7 +2,12 @@
 // NYC Parks Forestry Tree Points: https://data.cityofnewyork.us/resource/hn5i-inap.json
 // Snapshot SHA-256: e659b1f75bf76a5f3e0ad8825e24fc01e5d48e61396ffb1328e25d330b4dc613
 // 70,680 unique living tree locations, quantized to 0.5 m.
-const response = await fetch(new URL('./tree-geodata.bin.gz', import.meta.url));
+import { hot } from '../lamp-game.js';
+
+// Lamp: decoded once and kept while the game's code runs again, as the buildings are (building-geodata.js).
+const address = new URL('./tree-geodata.bin.gz', import.meta.url);
+export const REAL_TREES = await hot(import.meta).keep('realTrees', async () => {
+const response = await fetch(address);
 if (!response.ok) throw new Error(`Tree data request failed: ${response.status}`);
 // Servers that send .gz files as Content-Encoding: gzip hand over bytes the browser has already inflated
 const body = new Uint8Array(await response.arrayBuffer());
@@ -34,11 +39,13 @@ function stream(start, end) {
   };
 }
 const xs = stream(12, zStart), zs = stream(zStart, data.length);
-export const REAL_TREES = new Float32Array(count * 2);
+const trees = new Float32Array(count * 2);
 let x = 0, z = 0;
-for (let i = 0; i < REAL_TREES.length; i += 2) {
+for (let i = 0; i < trees.length; i += 2) {
   x += xs.delta(); z += zs.delta();
-  REAL_TREES[i] = x * 0.5;
-  REAL_TREES[i + 1] = z * 0.5;
+  trees[i] = x * 0.5;
+  trees[i + 1] = z * 0.5;
 }
 if (!xs.done() || !zs.done()) throw invalidData();
+return trees;
+}, { from: ['js/tree-geodata.bin.gz'] });

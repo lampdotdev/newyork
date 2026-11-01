@@ -123,7 +123,7 @@ async function initApp() {
   const lighting = live.keep('lighting', () => {
     const made = new LightingSystem(scene, renderer);
     const own = [...scene.children];
-    return { made, own, dispose() { for (const object of own) object.removeFromParent(); } };
+    return { made, own, dispose() { made.release(); for (const object of own) object.removeFromParent(); } };
   }, { inputs: [scene, renderer] });
   scene.add(...lighting.own);
   const lightingSystem = lighting.made;
@@ -971,7 +971,9 @@ async function initApp() {
     if (state.map === true) mapSystem.toggleFullMap(true);
   }
 
-  game({ renderer, init() { const was = pendingRestore(); if (was) startFrom(was); }, frame, touch: false, keyboard: false, snapshot });
+  game({ renderer, init() { const was = pendingRestore(); if (was) startFrom(was); }, frame, touch: false, keyboard: false, snapshot,
+    // What this run made that no part keeps goes with it: the map and the camera system are made afresh by the next.
+    dispose() { cameraSystem.release(); mapSystem.release(); } });
   container.appendChild(renderer.domElement);
 }
 
