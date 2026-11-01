@@ -89,7 +89,7 @@ function createPostProcessing(renderer, sceneColor, reflections, options = {}) {
   }
 
   applyPreset('golden');
-  return { outputNode, applyPreset };
+  return { outputNode, applyPreset, dispose() { bloomPass?.dispose(); } };
 }
 
 export { createPostProcessing };

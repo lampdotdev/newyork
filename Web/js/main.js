@@ -316,7 +316,7 @@ async function initApp() {
   // 5. TSL RenderPipeline with Half-Res Screen Space Reflections (SSRNode), Bloom & Filmic Toning
   //    Fade out distant and matte surfaces so SSR spends its rays on visible glossy reflections.
   await showLoadingStage('Setting up visual effects, map and interface...');
-  let renderPipeline, scenePass, colorGrade, sceneMRT = null;
+  let renderPipeline, scenePass, colorGrade, ssrPass = null, sceneMRT = null;
   if (!QUALITY.reflections) {
     scenePass = pass(scene, cameraSystem.camera);
     colorGrade = createPostProcessing(renderer, scenePass.getTextureNode('output'), vec3(0), { bloom: QUALITY.bloom });
@@ -343,7 +343,7 @@ async function initApp() {
   const scenePassNormal = scenePass.getTextureNode('normal');
   const scenePassMetalRough = scenePass.getTextureNode('metalRough');
 
-  const ssrPass = ssr(scenePassColor, scenePassDepth, scenePassNormal, {
+  ssrPass = ssr(scenePassColor, scenePassDepth, scenePassNormal, {
     metalnessNode: scenePassMetalRough.r,
     roughnessNode: scenePassMetalRough.g,
     camera: cameraSystem.camera
@@ -971,9 +971,24 @@ async function initApp() {
     if (state.map === true) mapSystem.toggleFullMap(true);
   }
 
+  // What this run made that no part keeps goes with it, once, each step whatever the one before it did. The passes are
+  // built around the kept renderer, which doesn't manage them and goes on holding them, and through them this whole run,
+  // until they're disposed: the pipeline drawing them first, the scene pass they read last. The map and the camera
+  // system are made afresh by the next run.
+  const leaving = [
+    () => renderPipeline.dispose(),
+    () => colorGrade.dispose(),
+    () => ssrPass?.dispose(),
+    () => scenePass.dispose(),
+    () => cameraSystem.release(),
+    () => mapSystem.release()
+  ];
   game({ renderer, init() { const was = pendingRestore(); if (was) startFrom(was); }, frame, touch: false, keyboard: false, snapshot,
-    // What this run made that no part keeps goes with it: the map and the camera system are made afresh by the next.
-    dispose() { cameraSystem.release(); mapSystem.release(); } });
+    dispose() {
+      for (const step of leaving.splice(0)) {
+        try { step(); } catch (e) { console.error('[dispose]', e); }
+      }
+    } });
   container.appendChild(renderer.domElement);
 }
 
