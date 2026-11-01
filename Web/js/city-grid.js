@@ -65,7 +65,6 @@ let parkTreeSites;
 let parkLampSites;
 let pavedPlazaRects;
 let sidewalkBlocks;
-let fdrViaduct;
 let streetGroundSurfaces = [];
 
 function addStreetGround(poly, height) {
@@ -2546,7 +2545,7 @@ function buildCityGrid(scene) {
   // 9 & 10. The East River bridges, harbor islands and the surrounding boroughs are built by boroughs.js
 
   // 11. Manhattan's waterfront edge: esplanades, shore highways & riverside park belts (see buildManhattanWaterfrontEdge)
-  const highwayLanes = buildManhattanWaterfrontEdge(group, { blockSidewalks, treeSites, lawnMat: cpLawnMat, curbMat, roadMat });
+  const { highwayLanes, viaductColliders } = buildManhattanWaterfrontEdge(group, { blockSidewalks, treeSites, lawnMat: cpLawnMat, curbMat, roadMat });
 
   // Batch static sub-meshes by material to reduce per-frame WebGPU draw calls
   batchStaticGroupMeshes(group, new Set([waterMat, roadMat, cpLawnMat, cpMeadowMat]));
@@ -2557,8 +2556,7 @@ function buildCityGrid(scene) {
   // roadway, handed over with the footprints)
   const sidewalks = roadSidewalks;
   // Player colliders of the South Street Viaduct's columns, ramps and portal
-  const colliders = (fdrViaduct && fdrViaduct.colliders) || [];
-  return { group, sidewalks, footprints, highwayLanes, colliders };
+  return { group, sidewalks, footprints, highwayLanes, colliders: viaductColliders };
 }
 
 // =====================================================================================================================
@@ -2943,7 +2941,6 @@ function buildManhattanWaterfrontEdge(group, { blockSidewalks, treeSites, lawnMa
   for (let i = lampSpots.length - 1; i >= 0; i--) {
     if (viaduct.keepOut(lampSpots[i][0], lampSpots[i][2])) lampSpots.splice(i, 1); // where it swerves over the walk
   }
-  fdrViaduct = viaduct;
 
   // ---- West St's Battery Park Underpass portal (buildUnderpassPortal) ---------------------------------------------
   // Over the last 42 m of Route 9A's carriageway, whose lanes go underground behind its dark screen and come up on the
@@ -3095,7 +3092,8 @@ function buildManhattanWaterfrontEdge(group, { blockSidewalks, treeSites, lawnMa
     a.pts.push(...b.pts);
     highwayLanes.splice(highwayLanes.indexOf(b), 1);
   }
-  return highwayLanes;
+  // Only the data goes out: a closure of the viaduct's kept past this build would hold every array the build gathered.
+  return { highwayLanes, viaductColliders: viaduct.colliders };
 }
 
 // =====================================================================================================================
@@ -3576,6 +3574,5 @@ export {
   parkTreeSites,
   parkLampSites,
   pavedPlazaRects,
-  sidewalkBlocks,
-  fdrViaduct
+  sidewalkBlocks
 };
