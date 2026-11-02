@@ -120,12 +120,14 @@ function groundHeightNode(worldXZ) {
 // A triangle mesh cut finer where the ground bends away from its triangles, so a polygon drawn as a few long slivers
 // can follow it: a triangle is split (at the middle of its longest edge) while the ground under its edges' middles,
 // quarters and centre strays more than `tolerance` metres from the plane through its corners, down to edges of
-// `minEdge`. Flat ground (the water's edge, level streets) isn't cut at all. Every attribute is interpolated.
+// `minEdge`. Flat ground (the water's edge, level streets) isn't cut at all. Every attribute is interpolated. Most of
+// what comes here isn't cut, so nothing is written until a triangle is, and the triangles around one go across in runs.
+const STRAY_U = [0.5, 0.25, 0.75], STRAY_V = [0.5, 0.75, 0.25];
 function tessellate(geometry, tolerance = 0.02, minEdge = 2) {
   const g = geometry.index ? geometry.toNonIndexed() : geometry;
   const names = Object.keys(g.attributes).filter((n) => !g.attributes[n].isInterleavedBufferAttribute);
-  const sources = names.map((n) => g.attributes[n]);
-  const sizes = sources.map((a) => a.itemSize);
+  const sources = names.map((n) => g.attributes[n].array);
+  const sizes = names.map((n) => g.attributes[n].itemSize);
   const offsets = [];
   let stride = 0;
   for (const size of sizes) { offsets.push(stride); stride += size; }
@@ -139,7 +141,8 @@ function tessellate(geometry, tolerance = 0.02, minEdge = 2) {
     const ab = (ax - bx) ** 2 + (az - bz) ** 2, bc = (bx - cx) ** 2 + (bz - cz) ** 2, ca = (cx - ax) ** 2 + (cz - az) ** 2;
     if (Math.max(ab, bc, ca) <= min2) return false;
     const ha = groundHeight(ax, az), hb = groundHeight(bx, bz), hc = groundHeight(cx, cz);
-    for (const [u, v] of [[0.5, 0.5], [0.25, 0.75], [0.75, 0.25]]) {
+    for (let w = 0; w < 3; w++) {
+      const u = STRAY_U[w], v = STRAY_V[w];
       if (Math.abs(groundHeight(ax * u + bx * v, az * u + bz * v) - (ha * u + hb * v)) > tolerance) return true;
       if (Math.abs(groundHeight(bx * u + cx * v, bz * u + cz * v) - (hb * u + hc * v)) > tolerance) return true;
       if (Math.abs(groundHeight(cx * u + ax * v, cz * u + az * v) - (hc * u + ha * v)) > tolerance) return true;
@@ -147,61 +150,79 @@ function tessellate(geometry, tolerance = 0.02, minEdge = 2) {
     return Math.abs(groundHeight((ax + bx + cx) / 3, (az + bz + cz) / 3) - (ha + hb + hc) / 3) > tolerance;
   };
 
-  let out = new Float32Array(count * stride + stride * 3);
-  let used = 0;
-  const write = (v) => {
-    if (used + stride > out.length) { const grown = new Float32Array(out.length * 2); grown.set(out); out = grown; }
-    out.set(v, used);
-    used += stride;
+  // In each attribute's own number type: a colour kept as bytes stays bytes (0-255, read as 0-1), never 255 as a float
+  const whole = sources.map((a) => a.constructor !== Float32Array && a.constructor !== Float64Array);
+  let outs = null, used = 0, room = 0;
+  const reserve = (vertices) => {
+    if (used + vertices <= room) return;
+    room = Math.max(room * 2, used + vertices, count + 3);
+    outs = sources.map((a, n) => {
+      const grown = new a.constructor(room * sizes[n]);
+      if (outs) grown.set(outs[n].subarray(0, used * sizes[n]));
+      return grown;
+    });
   };
-  const vertex = (i) => {
-    const v = new Float32Array(stride);
-    sources.forEach((a, n) => { for (let k = 0; k < sizes[n]; k++) v[offsets[n] + k] = a.array[i * sizes[n] + k]; });
-    return v;
+  const write = (v) => {
+    reserve(1);
+    for (let n = 0; n < sizes.length; n++) {
+      const out = outs[n], size = sizes[n], o = used * size, at = offsets[n];
+      for (let k = 0; k < size; k++) out[o + k] = whole[n] ? Math.round(v[at + k]) : v[at + k];
+    }
+    used++;
+  };
+  // The vertices from `from` up to `to` as they came.
+  const keep = (from, to) => {
+    if (from === to) return;
+    reserve(to - from);
+    for (let n = 0; n < sizes.length; n++) outs[n].set(sources[n].subarray(from * sizes[n], to * sizes[n]), used * sizes[n]);
+    used += to - from;
+  };
+  const read = (i, v) => {
+    for (let n = 0; n < sizes.length; n++) {
+      const a = sources[n], size = sizes[n], o = i * size, at = offsets[n];
+      for (let k = 0; k < size; k++) v[at + k] = a[o + k];
+    }
   };
   const d2 = (a, b) => (a[P] - b[P]) ** 2 + (a[P + 2] - b[P + 2]) ** 2;
-  const mid = (a, b) => { const m = new Float32Array(stride); for (let k = 0; k < stride; k++) m[k] = (a[k] + b[k]) / 2; return m; };
+  // A middle is in use only until both halves are done, and they're deeper: one for each depth is enough.
+  const middles = [];
+  const mid = (a, b, depth) => {
+    const m = middles[depth] ??= new Float32Array(stride);
+    for (let k = 0; k < stride; k++) m[k] = (a[k] + b[k]) / 2;
+    return m;
+  };
   const split = (a, b, c, depth) => {
     if (depth > 24 || !strays(a, b, c)) { write(a); write(b); write(c); return; }
+    cut(a, b, c, depth);
+  };
+  const cut = (a, b, c, depth) => {
     const ab = d2(a, b), bc = d2(b, c), ca = d2(c, a), longest = Math.max(ab, bc, ca);
     // The longest edge split at its middle, keeping the winding.
-    if (longest === ab) { const m = mid(a, b); split(a, m, c, depth + 1); split(m, b, c, depth + 1); }
-    else if (longest === bc) { const m = mid(b, c); split(a, b, m, depth + 1); split(a, m, c, depth + 1); }
-    else { const m = mid(c, a); split(a, b, m, depth + 1); split(m, b, c, depth + 1); }
+    if (longest === ab) { const m = mid(a, b, depth); split(a, m, c, depth + 1); split(m, b, c, depth + 1); }
+    else if (longest === bc) { const m = mid(b, c, depth); split(a, b, m, depth + 1); split(a, m, c, depth + 1); }
+    else { const m = mid(c, a, depth); split(a, b, m, depth + 1); split(m, b, c, depth + 1); }
   };
-  // Most triangles are small: those are copied straight across without being looked at further.
-  const pos = sources[names.indexOf('position')].array;
+  // Most triangles are small: those stay as they are without being looked at further.
+  const pos = sources[names.indexOf('position')];
   const small = (i) => {
     const ax = pos[i * 3], az = pos[i * 3 + 2], bx = pos[i * 3 + 3], bz = pos[i * 3 + 5], cx = pos[i * 3 + 6], cz = pos[i * 3 + 8];
     return (ax - bx) ** 2 + (az - bz) ** 2 <= min2 && (bx - cx) ** 2 + (bz - cz) ** 2 <= min2 && (cx - ax) ** 2 + (cz - az) ** 2 <= min2;
   };
-  const copy = (i) => {
-    if (used + stride * 3 > out.length) { const grown = new Float32Array(out.length * 2); grown.set(out); out = grown; }
-    for (let v = i; v < i + 3; v++) {
-      for (let n = 0; n < sources.length; n++) {
-        const a = sources[n].array, size = sizes[n], o = used + offsets[n];
-        for (let k = 0; k < size; k++) out[o + k] = a[v * size + k];
-      }
-      used += stride;
-    }
-  };
+  const a = new Float32Array(stride), b = new Float32Array(stride), c = new Float32Array(stride);
+  let kept = 0;
   for (let i = 0; i < count; i += 3) {
-    if (small(i)) copy(i);
-    else split(vertex(i), vertex(i + 1), vertex(i + 2), 0);
+    if (small(i)) continue;
+    read(i, a); read(i + 1, b); read(i + 2, c);
+    if (!strays(a, b, c)) continue;
+    keep(kept, i);
+    cut(a, b, c, 0);
+    kept = i + 3;
   }
-  const vertices = used / stride;
-  if (vertices === count) return g;
+  if (!outs) return g;
+  keep(kept, count);
   const result = new THREE.BufferGeometry();
   names.forEach((n, k) => {
-    // In the attribute's own number type: a colour kept as bytes stays bytes (0-255, read as 0-1), never 255 as a float
-    const Kind = sources[k].array.constructor;
-    const whole = Kind !== Float32Array && Kind !== Float64Array;
-    const data = new Kind(vertices * sizes[k]);
-    for (let v = 0; v < vertices; v++) for (let j = 0; j < sizes[k]; j++) {
-      const value = out[v * stride + offsets[k] + j];
-      data[v * sizes[k] + j] = whole ? Math.round(value) : value;
-    }
-    result.setAttribute(n, new THREE.BufferAttribute(data, sizes[k], sources[k].normalized));
+    result.setAttribute(n, new THREE.BufferAttribute(outs[k].slice(0, used * sizes[k]), sizes[k], g.attributes[n].normalized));
   });
   return result;
 }
