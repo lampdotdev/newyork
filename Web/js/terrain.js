@@ -12,12 +12,15 @@ import * as THREE from 'three/webgpu';
 import { float, texture, uniform, vec2 } from 'three/tsl';
 import { hot, asset } from '../lamp-game.js';
 
-let grid = null; // { x0, z0, step, cols, rows, heights: Float32Array }
+let grid = null; // { x0, z0, step, cols, rows, heights: Float32Array, texture }
 
 // Lamp: kept while main.js runs again for a change (lamp-game.js, "Running the game's code again"), so the heights are
 // read once; the parts of the city built on them name what this returns as one of their inputs.
 async function loadTerrain(url = './data/elevation.bin.gz') {
-  grid = await hot(import.meta).keep('heights', () => readHeights(url), { from: [url.replace(/^\.\//, '')] });
+  grid = await hot(import.meta).keep('heights', () => readHeights(url), {
+    from: [url.replace(/^\.\//, '')],
+    dispose: (kept) => kept?.texture?.dispose()
+  });
   return grid;
 }
 
@@ -84,23 +87,22 @@ function groundTilt(x, z, yaw, length = 4, width = 1.8) {
   return [Math.atan2(front - back, length), Math.atan2(right - left, width)];
 }
 
-// The heights as a texture, for shaders that measure from the ground (a canyon's shade, a signal's lamps, grime).
-let groundTexture = null;
+// The heights as a texture, for shaders that measure from the ground (a canyon's shade, a signal's lamps, grime). The
+// kept heights own it: a run uses the one they have, and it goes with them.
 const terrainOrigin = uniform(new THREE.Vector2());
 const terrainSize = uniform(new THREE.Vector2(1, 1));
 function terrainTexture() {
-  if (groundTexture) return groundTexture;
-  const data = grid ? grid.heights : new Float32Array(1);
-  groundTexture = new THREE.DataTexture(data, grid ? grid.cols : 1, grid ? grid.rows : 1, THREE.RedFormat, THREE.FloatType);
-  groundTexture.magFilter = THREE.LinearFilter;
-  groundTexture.minFilter = THREE.LinearFilter;
-  groundTexture.wrapS = groundTexture.wrapT = THREE.ClampToEdgeWrapping;
-  groundTexture.needsUpdate = true;
-  if (grid) {
-    terrainOrigin.value.set(grid.x0, grid.z0);
-    terrainSize.value.set(grid.step * (grid.cols - 1), grid.step * (grid.rows - 1));
+  if (!grid.texture) {
+    const made = new THREE.DataTexture(grid.heights, grid.cols, grid.rows, THREE.RedFormat, THREE.FloatType);
+    made.magFilter = THREE.LinearFilter;
+    made.minFilter = THREE.LinearFilter;
+    made.wrapS = made.wrapT = THREE.ClampToEdgeWrapping;
+    made.needsUpdate = true;
+    grid.texture = made;
   }
-  return groundTexture;
+  terrainOrigin.value.set(grid.x0, grid.z0);
+  terrainSize.value.set(grid.step * (grid.cols - 1), grid.step * (grid.rows - 1));
+  return grid.texture;
 }
 
 // The ground's height under a world position, in a shader.

@@ -26,6 +26,7 @@ import {
   select,
   uniform
 } from 'three/tsl';
+import { hot } from '../lamp-game.js';
 import { cityUniforms, filteredPulse } from './tsl-materials.js';
 import {
   MANHATTAN_COASTLINE,
@@ -423,7 +424,9 @@ function distToManhattan(x, z) {
 // =====================================================================================================================
 
 const LU = { minX: -14000, maxX: 18000, minZ: -24000, maxZ: 28000, w: 1024, h: 1664 };
-const luData = new Uint8Array(LU.w * LU.h * 4);
+// Painted once and kept with the zone map and their textures (see `landUse` below); the painters write to whichever is
+// being made, and what reads them reads the kept ones.
+let luData, zoneData, landUseTexture, zoneTexture;
 
 // Scanline fill of a polygon over the LU texel grid (texel centres inside): span(j, i0, i1) per covered run of row j
 function rasterPolygon(pts, span) {
@@ -668,16 +671,6 @@ function paintLandUse() {
   luBlur(1);
 }
 
-paintLandUse();
-
-const landUseTexture = new THREE.DataTexture(luData, LU.w, LU.h, THREE.RGBAFormat);
-landUseTexture.magFilter = THREE.LinearFilter;
-landUseTexture.minFilter = THREE.LinearMipmapLinearFilter;
-landUseTexture.generateMipmaps = true;
-landUseTexture.wrapS = THREE.ClampToEdgeWrapping;
-landUseTexture.wrapT = THREE.ClampToEdgeWrapping;
-landUseTexture.needsUpdate = true;
-
 // =====================================================================================================================
 // 3. NEIGHBOURHOOD STREET GRIDS (shared by the ground shader and the building generator so buildings sit on blocks)
 //    u runs along each block's long side: u = R(angle) * (p - origin); pu >= pv are the block pitches and su / sv the
@@ -717,9 +710,6 @@ ZONE_LIST.forEach((z, i) => {
   z.sin = Math.sin(a);
   ZONES[z.id] = z;
 });
-
-// Zone map: zone index per land-use texel (255 = no land)
-const zoneData = new Uint8Array(LU.w * LU.h).fill(255);
 
 function paintZones() {
   const DEFAULT = { nj: 'njheights', brooklyn: 'bksouth', queens: 'queens', upper: 'upper', bronx: 'bronx', si: 'si' };
@@ -763,15 +753,37 @@ function paintZones() {
     }
   }
 }
-paintZones();
 
-const zoneTexture = new THREE.DataTexture(zoneData, LU.w, LU.h, THREE.RedFormat, THREE.UnsignedByteType);
-zoneTexture.magFilter = THREE.NearestFilter;
-zoneTexture.minFilter = THREE.NearestFilter;
-zoneTexture.generateMipmaps = false;
-zoneTexture.wrapS = THREE.ClampToEdgeWrapping;
-zoneTexture.wrapT = THREE.ClampToEdgeWrapping;
-zoneTexture.needsUpdate = true;
+function dataTexture(data, format, filter, minFilter, mipmaps) {
+  const made = new THREE.DataTexture(data, LU.w, LU.h, format);
+  made.magFilter = filter;
+  made.minFilter = minFilter;
+  made.generateMipmaps = mipmaps;
+  made.wrapS = THREE.ClampToEdgeWrapping;
+  made.wrapT = THREE.ClampToEdgeWrapping;
+  made.needsUpdate = true;
+  return made;
+}
+
+// The land-use map and the zone map (zone index per land-use texel, 255 = no land), painted once and kept with their
+// textures until what they're painted from changes. The old version of this module outlives its run, so it lets go of
+// what the kept value holds.
+({ luData, zoneData, landUseTexture, zoneTexture } = hot(import.meta).keep('landUse', () => {
+  luData = new Uint8Array(LU.w * LU.h * 4);
+  zoneData = new Uint8Array(LU.w * LU.h).fill(255);
+  paintLandUse();
+  paintZones();
+  return {
+    luData,
+    zoneData,
+    landUseTexture: dataTexture(luData, THREE.RGBAFormat, THREE.LinearFilter, THREE.LinearMipmapLinearFilter, true),
+    zoneTexture: dataTexture(zoneData, THREE.RedFormat, THREE.NearestFilter, THREE.NearestFilter, false)
+  };
+}, {
+  from: ['js/boroughs.js'],
+  dispose(kept) { kept.landUseTexture.dispose(); kept.zoneTexture.dispose(); }
+}));
+hot(import.meta).dispose(() => { luData = zoneData = landUseTexture = zoneTexture = null; });
 
 // The zone of a world point: the same texel the ground shader samples (nearest, clamped to the edge)
 function zoneAt(x, z) {

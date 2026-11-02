@@ -135,8 +135,24 @@ const TIME_PRESETS = {
 };
 
 class LightingSystem {
-  // Lamp: the kept part it belongs to was built again (main.js). While the part is kept, so is this.
-  release() { systems.delete(this); }
+  // Lamp: the kept part it belongs to was built again (main.js). While the part is kept, so is this. The next system is
+  // built before this one goes, so the scene may be showing that one's environment and fog already: those stay. All of
+  // this is its own, each step runs whatever the one before it did, and a second call finds nothing left to do.
+  release() {
+    if (!systems.delete(this)) return;
+    const { scene, sky, sunLight, envRenderTarget, pmremGenerator, fogNode } = this;
+    if (envRenderTarget && scene.environment === envRenderTarget.texture) scene.environment = null;
+    if (fogNode && scene.fogNode === fogNode) scene.fogNode = null;
+    for (const step of [
+      () => sunLight.dispose(), // and its shadow
+      () => envRenderTarget?.dispose(),
+      () => pmremGenerator?.dispose(),
+      () => sky.geometry.dispose(),
+      () => sky.material.dispose()
+    ]) {
+      try { step(); } catch (e) { console.error('[lighting] release', e); }
+    }
+  }
 
   constructor(scene, renderer = null) {
     systems.add(this);
@@ -228,7 +244,7 @@ class LightingSystem {
     // so helicopter / observatory views stay clearer than the horizon.
     this.uFogDensity = uniform(TIME_PRESETS.golden.fogDensity);
     this.uFogHeight = uniform(900.0);
-    if (this.envRenderTarget) this.scene.fogNode = this.createAerialFogNode();
+    if (this.envRenderTarget) this.scene.fogNode = this.fogNode = this.createAerialFogNode();
   }
 
   createAerialFogNode() {
